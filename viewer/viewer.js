@@ -46,10 +46,6 @@
 
   // Poll elements
   const pollBanner = document.getElementById('poll-banner');
-  const pollQuestion = document.getElementById('poll-question');
-  const pollButtons = document.getElementById('poll-buttons');
-  const pollResults = document.getElementById('poll-results');
-  const pollStatus = document.getElementById('poll-status');
   const pollModal = document.getElementById('poll-modal');
   const pollQuestionInput = document.getElementById('poll-question-input');
   const pollOptionCount = document.getElementById('poll-option-count');
@@ -314,7 +310,7 @@
     connectionStatus.style.display = 'none';
     toggleChat(false);
     chatMessages.innerHTML = '';
-    pollBanner.style.display = 'none';
+    if (pollBanner) pollBanner.style.display = 'none';
     currentPollId = null;
   }
 
@@ -346,10 +342,8 @@
     msgEl.appendChild(text);
     chatMessages.appendChild(msgEl);
 
-    // DOM limit
-    while (chatMessages.children.length > MAX_CHAT_DOM) {
-      chatMessages.removeChild(chatMessages.firstChild);
-    }
+    // DOM limit (preserve active poll card)
+    trimChatDOM();
 
     // Auto scroll
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -409,20 +403,13 @@
     }
   }
 
-  function appendSystemChat(text) {
-    const el = document.createElement('div');
-    el.className = 'chat-system';
-    el.textContent = text;
-    chatMessages.appendChild(el);
-
+  function trimChatDOM() {
     while (chatMessages.children.length > MAX_CHAT_DOM) {
-      chatMessages.removeChild(chatMessages.firstChild);
-    }
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-
-    if (!chatVisible) {
-      unreadCount++;
-      updateChatBadge();
+      const first = chatMessages.firstChild;
+      if (first && first.classList && first.classList.contains('chat-poll-card') && !first.classList.contains('ended')) {
+        break;
+      }
+      chatMessages.removeChild(first);
     }
   }
 
@@ -438,9 +425,18 @@
       hasVoted = true;
     }
 
-    pollQuestion.textContent = data.question;
-    pollButtons.innerHTML = '';
-    pollResults.innerHTML = '';
+    // Create poll card in chat messages
+    const card = document.createElement('div');
+    card.className = 'chat-poll-card';
+    card.id = 'poll-card-' + data.pollId;
+
+    const questionEl = document.createElement('div');
+    questionEl.className = 'chat-poll-question';
+    questionEl.textContent = '\u{1F4CA} ' + data.question;
+    card.appendChild(questionEl);
+
+    const buttonsEl = document.createElement('div');
+    buttonsEl.className = 'chat-poll-buttons';
 
     for (let i = 0; i < data.optionCount; i++) {
       const btn = document.createElement('button');
@@ -454,14 +450,25 @@
       } else {
         btn.addEventListener('click', () => votePoll(data.pollId, i));
       }
-      pollButtons.appendChild(btn);
+      buttonsEl.appendChild(btn);
     }
+    card.appendChild(buttonsEl);
 
-    pollStatus.textContent = 'Poll active';
-    pollBanner.classList.remove('ended');
-    pollBanner.style.display = 'block';
+    const resultsEl = document.createElement('div');
+    resultsEl.className = 'chat-poll-results';
+    card.appendChild(resultsEl);
 
-    appendSystemChat('[설문조사] ' + data.question);
+    const statusEl = document.createElement('div');
+    statusEl.className = 'chat-poll-status';
+    statusEl.textContent = '\uD22C\uD45C \uC9C4\uD589 \uC911';
+    card.appendChild(statusEl);
+
+    chatMessages.appendChild(card);
+    trimChatDOM();
+
+    // Auto-scroll and open chat panel
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    toggleChat(true);
 
     // Show End Poll button for teacher
     if (isTeacher && btnEndPoll) {
@@ -476,40 +483,52 @@
     localStorage.setItem('jls-poll-' + pollId, option.toString());
     WsClient.send('poll:vote', { pollId, option });
 
-    // Disable all buttons and highlight voted one
-    const buttons = pollButtons.querySelectorAll('button');
-    buttons.forEach((btn, i) => {
-      btn.disabled = true;
-      if (i === option) btn.classList.add('voted');
-    });
+    // Disable all buttons and highlight voted one in the poll card
+    const card = document.getElementById('poll-card-' + pollId);
+    if (card) {
+      const buttons = card.querySelectorAll('.chat-poll-buttons button');
+      buttons.forEach((btn, i) => {
+        btn.disabled = true;
+        if (i === option) btn.classList.add('voted');
+      });
+    }
   }
 
   function handlePollResults(data) {
     if (data.pollId !== currentPollId) return;
-    renderPollBars(data.votes, data.totalVoters);
-    pollStatus.textContent = `${data.totalVoters} vote${data.totalVoters !== 1 ? 's' : ''}`;
+    const card = document.getElementById('poll-card-' + data.pollId);
+    if (card) {
+      const resultsEl = card.querySelector('.chat-poll-results');
+      const statusEl = card.querySelector('.chat-poll-status');
+      if (resultsEl) renderPollBars(resultsEl, data.votes, data.totalVoters);
+      if (statusEl) statusEl.textContent = `${data.totalVoters}\uBA85 \uD22C\uD45C`;
+    }
   }
 
   function handlePollEnd(data) {
+    // Find the poll card (use saved pollId from data, or find the latest card)
+    const cardId = data.pollId || currentPollId;
+    const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
     currentPollId = null;
-    renderPollBars(data.finalVotes, data.totalVoters);
-    pollStatus.textContent = `Poll ended - ${data.totalVoters} total vote${data.totalVoters !== 1 ? 's' : ''}`;
-    pollBanner.classList.add('ended');
 
-    // Show results in chat
-    const parts = data.finalVotes.map((v, i) => `${i + 1}: ${v}`);
-    appendSystemChat(`[설문조사 종료] ${parts.join(' / ')} (총 ${data.totalVoters}명)`);
+    if (card) {
+      const resultsEl = card.querySelector('.chat-poll-results');
+      const statusEl = card.querySelector('.chat-poll-status');
+      if (resultsEl) renderPollBars(resultsEl, data.finalVotes, data.totalVoters);
+      if (statusEl) statusEl.textContent = `\uD22C\uD45C \uC885\uB8CC \u2014 \uCD1D ${data.totalVoters}\uBA85`;
+      card.classList.add('ended');
 
-    // Disable buttons
-    const buttons = pollButtons.querySelectorAll('button');
-    buttons.forEach(btn => { btn.disabled = true; });
+      // Disable buttons
+      const buttons = card.querySelectorAll('.chat-poll-buttons button');
+      buttons.forEach(btn => { btn.disabled = true; });
+    }
 
     // Hide End Poll button
     if (btnEndPoll) btnEndPoll.style.display = 'none';
   }
 
-  function renderPollBars(votes, totalVoters) {
-    pollResults.innerHTML = '';
+  function renderPollBars(container, votes, totalVoters) {
+    container.innerHTML = '';
 
     for (let i = 0; i < votes.length; i++) {
       const row = document.createElement('div');
@@ -536,7 +555,7 @@
       row.appendChild(label);
       row.appendChild(track);
       row.appendChild(value);
-      pollResults.appendChild(row);
+      container.appendChild(row);
     }
   }
 

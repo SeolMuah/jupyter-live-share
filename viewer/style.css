@@ -599,7 +599,52 @@ footer label {
   vertical-align: middle;
 }
 
-/* === Poll Banner === */
+/* === Chat Poll Card (inline in chat messages) === */
+.chat-poll-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.chat-poll-question {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.chat-poll-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.chat-poll-buttons button {
+  min-width: 40px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.2s, color 0.2s;
+}
+.chat-poll-buttons button:not(:disabled):hover { background: var(--accent); color: #fff; }
+.chat-poll-buttons button.voted { background: var(--accent); color: #fff; }
+.chat-poll-buttons button:disabled { opacity: 0.6; cursor: default; }
+.chat-poll-buttons button.voted:disabled { opacity: 1; }
+.chat-poll-results { margin-top: 4px; }
+.chat-poll-status {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.chat-poll-card.ended {
+  border-color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* === Poll Banner (legacy, hidden) === */
 #poll-banner {
   margin-bottom: 12px;
   padding: 14px 16px;

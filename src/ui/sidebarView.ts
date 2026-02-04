@@ -323,6 +323,60 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-descriptionForeground);
     }
 
+    /* Chat poll card */
+    .chat-poll-card {
+      margin: 6px 0;
+      padding: 8px 10px;
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-textLink-foreground);
+      border-radius: 6px;
+    }
+    .chat-poll-question {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .chat-poll-results { margin-top: 4px; }
+    .poll-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 3px;
+      font-size: 11px;
+    }
+    .poll-bar-label {
+      min-width: 16px;
+      font-weight: 600;
+    }
+    .poll-bar-track {
+      flex: 1;
+      height: 16px;
+      background: var(--vscode-input-background);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .poll-bar-fill {
+      height: 100%;
+      background: var(--vscode-textLink-foreground);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .poll-bar-value {
+      min-width: 50px;
+      text-align: right;
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .chat-poll-status {
+      margin-top: 4px;
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .chat-poll-card.ended {
+      border-color: var(--vscode-descriptionForeground);
+      opacity: 0.8;
+    }
+
     /* Copied tooltip */
     .copied-toast {
       position: fixed;
@@ -599,7 +653,11 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       function trimChatMessages() {
         while (chatMessages.children.length > MAX_CHAT_MESSAGES) {
-          chatMessages.removeChild(chatMessages.firstChild);
+          const first = chatMessages.firstChild;
+          if (first && first.classList && first.classList.contains('chat-poll-card') && !first.classList.contains('ended')) {
+            break;
+          }
+          chatMessages.removeChild(first);
         }
       }
 
@@ -650,6 +708,29 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         pollActiveQuestion.textContent = data.question;
         pollResultsMini.textContent = 'Votes: 0';
         pollActiveBar.classList.add('visible');
+
+        // Create poll card in chat messages
+        const card = document.createElement('div');
+        card.className = 'chat-poll-card';
+        card.id = 'poll-card-' + data.pollId;
+
+        const questionEl = document.createElement('div');
+        questionEl.className = 'chat-poll-question';
+        questionEl.textContent = '\u{1F4CA} ' + data.question;
+        card.appendChild(questionEl);
+
+        const resultsEl = document.createElement('div');
+        resultsEl.className = 'chat-poll-results';
+        card.appendChild(resultsEl);
+
+        const statusEl = document.createElement('div');
+        statusEl.className = 'chat-poll-status';
+        statusEl.textContent = '\uD22C\uD45C \uC9C4\uD589 \uC911';
+        card.appendChild(statusEl);
+
+        chatMessages.appendChild(card);
+        trimChatMessages();
+        chatMessages.scrollTop = chatMessages.scrollHeight;
       }
 
       function updatePollResults(data) {
@@ -657,6 +738,45 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         const votes = data.votes || [];
         const parts = votes.map((v, i) => (i+1) + ': ' + v).join('  ');
         pollResultsMini.textContent = 'Total: ' + total + '  |  ' + parts;
+
+        // Update chat poll card results
+        const card = data.pollId ? document.getElementById('poll-card-' + data.pollId) : null;
+        if (card) {
+          const resultsEl = card.querySelector('.chat-poll-results');
+          const statusEl = card.querySelector('.chat-poll-status');
+          if (resultsEl) renderPollBars(resultsEl, votes, total);
+          if (statusEl) statusEl.textContent = total + '\uBA85 \uD22C\uD45C';
+        }
+      }
+
+      function renderPollBars(container, votes, totalVoters) {
+        container.innerHTML = '';
+        for (let i = 0; i < votes.length; i++) {
+          const row = document.createElement('div');
+          row.className = 'poll-bar-row';
+
+          const label = document.createElement('span');
+          label.className = 'poll-bar-label';
+          label.textContent = (i + 1).toString();
+
+          const track = document.createElement('div');
+          track.className = 'poll-bar-track';
+
+          const fill = document.createElement('div');
+          fill.className = 'poll-bar-fill';
+          const pct = totalVoters > 0 ? (votes[i] / totalVoters) * 100 : 0;
+          fill.style.width = pct + '%';
+          track.appendChild(fill);
+
+          const value = document.createElement('span');
+          value.className = 'poll-bar-value';
+          value.textContent = votes[i] + ' (' + Math.round(pct) + '%)';
+
+          row.appendChild(label);
+          row.appendChild(track);
+          row.appendChild(value);
+          container.appendChild(row);
+        }
       }
 
       function hidePollActive(data) {
@@ -665,11 +785,18 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         btnPoll.disabled = false;
         pollActiveBar.classList.remove('visible');
 
-        // Show final results in chat
-        if (data && data.finalVotes) {
-          const total = data.totalVoters || 0;
-          const parts = data.finalVotes.map((v, i) => (i+1) + ': ' + v).join(', ');
-          addSystemMessage('Poll ended — Total: ' + total + ' | ' + parts);
+        // Update chat poll card with final results
+        if (data) {
+          const cardId = data.pollId;
+          const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
+          if (card && data.finalVotes) {
+            const total = data.totalVoters || 0;
+            const resultsEl = card.querySelector('.chat-poll-results');
+            const statusEl = card.querySelector('.chat-poll-status');
+            if (resultsEl) renderPollBars(resultsEl, data.finalVotes, total);
+            if (statusEl) statusEl.textContent = '\uD22C\uD45C \uC885\uB8CC \u2014 \uCD1D ' + total + '\uBA85';
+            card.classList.add('ended');
+          }
         }
       }
 
