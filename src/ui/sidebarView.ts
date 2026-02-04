@@ -525,14 +525,16 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       btnPollStart.addEventListener('click', () => {
         const question = pollQuestion.value.trim();
         if (!question) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          addSystemMessage('WebSocket not connected. Cannot create poll.');
+          return;
+        }
         const optionCount = parseInt(pollOptionCount.value);
         const pollId = Date.now().toString();
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'poll:start',
-            data: { question, optionCount, pollId }
-          }));
-        }
+        ws.send(JSON.stringify({
+          type: 'poll:start',
+          data: { question, optionCount, pollId }
+        }));
         pollForm.classList.remove('visible');
         pollQuestion.value = '';
       });
@@ -708,6 +710,9 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         pollActiveQuestion.textContent = data.question;
         pollResultsMini.textContent = 'Votes: 0';
         pollActiveBar.classList.add('visible');
+
+        // Idempotency: skip if card already exists (e.g. reconnection)
+        if (data.pollId && document.getElementById('poll-card-' + data.pollId)) return;
 
         // Create poll card in chat messages
         const card = document.createElement('div');

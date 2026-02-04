@@ -425,6 +425,10 @@
       hasVoted = true;
     }
 
+    // Idempotency: skip if card already exists (e.g. reconnection)
+    const existingCard = document.getElementById('poll-card-' + data.pollId);
+    if (existingCard) return;
+
     // Create poll card in chat messages
     const card = document.createElement('div');
     card.className = 'chat-poll-card';
