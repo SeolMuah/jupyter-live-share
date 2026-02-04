@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Share</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- highlight.js - Python syntax highlighting (VS Code-like themes) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css" id="hljs-light">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css" id="hljs-dark" disabled>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/java.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/r.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/css.min.js"></script>
+  <!-- marked.js - Markdown rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+  <!-- KaTeX - Math rendering -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+  <!-- DOMPurify - Sanitize HTML -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+</head>
+<body>
+  <!-- PIN 입력 화면 -->
+  <div id="pin-screen" class="pin-screen" style="display:none;">
+    <div class="pin-box">
+      <h2>Jupyter Live Share</h2>
+      <p>Enter the session PIN to join:</p>
+      <input type="text" id="pin-input" maxlength="6" pattern="\d*" placeholder="PIN" autofocus>
+      <button id="pin-submit">Join</button>
+      <p id="pin-error" class="error" style="display:none;"></p>
+    </div>
+  </div>
+
+  <!-- 연결 상태 -->
+  <div id="connection-status" class="connection-status" style="display:none;">
+    <span id="status-text">Connecting...</span>
+  </div>
+
+  <!-- 헤더 -->
+  <header id="header">
+    <div class="header-left">
+      <span id="file-name">Loading...</span>
+    </div>
+    <div class="header-right">
+      <span id="viewer-count">0명 접속</span>
+      <button id="theme-toggle" title="Toggle theme">☀️</button>
+    </div>
+  </header>
+
+  <!-- 노트북 컨텐츠 -->
+  <main id="notebook-container">
+    <div id="notebook-cells"></div>
+  </main>
+
+  <!-- 하단 툴바 -->
+  <footer id="toolbar" style="display:none;">
+    <button id="btn-download" title="Download file">Download</button>
+    <label id="auto-scroll-label">
+      <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+    </label>
+  </footer>
+
+  <script src="renderer.js"></script>
+  <script src="websocket.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>

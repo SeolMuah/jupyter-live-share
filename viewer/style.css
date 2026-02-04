@@ -1,0 +1,475 @@
+/* === CSS Variables (Light Mode) === */
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-cell: #ffffff;
+  --bg-output: #f8f9fa;
+  --bg-code: #f6f8fa;
+  --bg-active: #fff8e1;
+  --text-primary: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #8b949e;
+  --border-color: #d0d7de;
+  --border-active: #ffc107;
+  --accent: #0969da;
+  --error-bg: #ffeef0;
+  --error-text: #cf222e;
+  --header-bg: #24292f;
+  --header-text: #ffffff;
+  --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* === Dark Mode === */
+[data-theme="dark"] {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-cell: #161b22;
+  --bg-output: #1c2128;
+  --bg-code: #1c2128;
+  --bg-active: #2d2000;
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --border-color: #30363d;
+  --border-active: #d29922;
+  --accent: #58a6ff;
+  --error-bg: #3d1214;
+  --error-text: #f85149;
+  --header-bg: #161b22;
+  --header-text: #c9d1d9;
+}
+
+/* === Reset === */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* === PIN Screen === */
+.pin-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  z-index: 1000;
+}
+
+.pin-box {
+  text-align: center;
+  padding: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  max-width: 360px;
+  width: 90%;
+}
+
+.pin-box h2 {
+  margin-bottom: 0.5rem;
+}
+
+.pin-box p {
+  margin-bottom: 1rem;
+  color: var(--text-secondary);
+}
+
+.pin-box input {
+  display: block;
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 1.5rem;
+  text-align: center;
+  letter-spacing: 0.5rem;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+  font-family: var(--font-mono);
+}
+
+.pin-box button {
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+.pin-box .error {
+  color: var(--error-text);
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* === Connection Status === */
+.connection-status {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 8px;
+  text-align: center;
+  background: #d29922;
+  color: #000;
+  font-size: 0.9rem;
+  z-index: 999;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* === Header === */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--header-bg);
+  color: var(--header-text);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-left {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+#theme-toggle {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+/* === Notebook Container === */
+#notebook-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+  padding-bottom: 60px;
+}
+
+/* === Cell === */
+.cell {
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  transition: border-color 0.3s, background-color 0.3s;
+}
+
+.cell.active {
+  border-color: var(--border-active);
+  background-color: var(--bg-active);
+  box-shadow: 0 0 0 1px var(--border-active);
+}
+
+/* === Code Cell === */
+.cell-code .cell-source {
+  display: flex;
+  background: var(--bg-code);
+}
+
+.exec-label {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px;
+  min-width: 48px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cell-source pre {
+  flex: 1;
+  margin: 0;
+  padding: 8px 8px 8px 0;
+  overflow-x: auto;
+}
+
+.cell-source code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* hljs 테마 배경색 제거 (셀 배경 사용) */
+.cell-source code.hljs {
+  background: transparent !important;
+}
+
+/* Copy button */
+.cell-code {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.cell-code:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn.copied {
+  color: #2ea043;
+  border-color: #2ea043;
+}
+
+/* === Markup Cell === */
+.cell-markup {
+  padding: 12px 16px;
+  background: var(--bg-cell);
+}
+
+.cell-markup h1, .cell-markup h2, .cell-markup h3 {
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.3em;
+}
+
+.cell-markup p {
+  margin-bottom: 0.5em;
+}
+
+.cell-markup ul, .cell-markup ol {
+  padding-left: 2em;
+  margin-bottom: 0.5em;
+}
+
+.cell-markup code {
+  font-family: var(--font-mono);
+  background: var(--bg-code);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.875rem;
+}
+
+.cell-markup pre code {
+  display: block;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+/* === Output === */
+.cell-outputs {
+  border-top: 1px solid var(--border-color);
+  padding: 8px 8px 8px 56px;
+  background: var(--bg-output);
+  overflow-x: auto;
+}
+
+.cell-outputs pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.cell-outputs img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 4px 0;
+}
+
+/* DataFrame tables */
+.cell-outputs table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin: 4px 0;
+}
+
+.cell-outputs th,
+.cell-outputs td {
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.cell-outputs th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+/* Stderr output */
+.output-stderr {
+  color: var(--error-text);
+}
+
+/* Error output */
+.cell-output-error {
+  color: var(--error-text);
+  background: var(--error-bg);
+  padding: 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+/* === Footer Toolbar === */
+footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+
+footer button {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+footer label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+/* === Plaintext Document === */
+.plaintext-document {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.document-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.document-type-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.document-copy-btn {
+  position: static;
+  opacity: 1;
+}
+
+.document-content {
+  padding: 0;
+  background: var(--bg-cell);
+}
+
+.document-content pre {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+
+.document-content code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background: none !important;
+  padding: 0 !important;
+}
+
+.document-content .cell-markup {
+  padding: 16px 20px;
+}
+
+/* === Session End === */
+.session-ended {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 1.2rem;
+}
+
+/* === Responsive === */
+@media (max-width: 768px) {
+  #notebook-container {
+    padding: 8px;
+  }
+
+  .exec-label {
+    min-width: 36px;
+    font-size: 0.7rem;
+    padding: 6px 4px;
+  }
+
+  .cell-outputs {
+    padding-left: 8px;
+  }
+
+  .cell-source code {
+    font-size: 0.8rem;
+  }
+}

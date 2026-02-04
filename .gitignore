@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# VSIX packages
+*.vsix
+
+# VS Code test
+.vscode-test/
+
+# Cloudflared binaries
+bin/cloudflared*
+bin/*.exe
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
