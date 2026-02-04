@@ -122,17 +122,62 @@ export function stopWsServer(): Promise<void> {
     viewerCount = 0;
     sessionPin = null;
 
-    if (wss) {
-      // 모든 클라이언트에게 세션 종료 알림
-      broadcast('session:end', {});
-
-      wss.close(() => {
-        Logger.info('WebSocket server stopped');
-        wss = null;
-        resolve();
-      });
-    } else {
+    if (!wss) {
       resolve();
+      return;
     }
+
+    const SHUTDOWN_TIMEOUT = 3000;
+
+    // 모든 클라이언트에게 세션 종료 알림
+    broadcast('session:end', {});
+
+    const forceShutdown = setTimeout(() => {
+      Logger.warn('WebSocket server graceful shutdown timed out, forcing close');
+      terminateAllClients();
+      wss = null;
+      resolve();
+    }, SHUTDOWN_TIMEOUT);
+
+    wss.close(() => {
+      clearTimeout(forceShutdown);
+      Logger.info('WebSocket server stopped');
+      wss = null;
+      resolve();
+    });
+
+    // 기존 클라이언트 연결 즉시 종료
+    terminateAllClients();
   });
+}
+
+/**
+ * 동기적으로 WebSocket 서버를 강제 종료한다 (프로세스 exit 핸들러용)
+ */
+export function forceStopWsServer(): void {
+  viewerCount = 0;
+  sessionPin = null;
+
+  if (wss) {
+    try {
+      broadcast('session:end', {});
+    } catch { /* 무시 */ }
+
+    terminateAllClients();
+
+    try {
+      wss.close();
+    } catch { /* 무시 */ }
+    wss = null;
+  }
+  Logger.info('WebSocket server force-stopped');
+}
+
+function terminateAllClients(): void {
+  if (!wss) return;
+  for (const client of wss.clients) {
+    try {
+      client.terminate();
+    } catch { /* 무시 */ }
+  }
 }

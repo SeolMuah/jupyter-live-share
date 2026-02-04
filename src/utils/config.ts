@@ -9,7 +9,7 @@ export interface LiveShareConfig {
 export function getConfig(): LiveShareConfig {
   const cfg = vscode.workspace.getConfiguration('jupyterLiveShare');
   return {
-    port: cfg.get<number>('port', 3000),
+    port: cfg.get<number>('port', 48632),
     maxViewers: cfg.get<number>('maxViewers', 100),
     tunnelProvider: cfg.get<string>('tunnelProvider', 'cloudflare') as LiveShareConfig['tunnelProvider'],
   };

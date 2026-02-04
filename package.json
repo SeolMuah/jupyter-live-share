@@ -2,9 +2,13 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Share Jupyter Notebooks in real-time with students via browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "jupyter-live-share",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SeolMuah/jupyter-live-share"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
@@ -41,7 +45,7 @@
       "properties": {
         "jupyterLiveShare.port": {
           "type": "number",
-          "default": 3000,
+          "default": 48632,
           "description": "Local server port for the live share session"
         },
         "jupyterLiveShare.maxViewers": {
