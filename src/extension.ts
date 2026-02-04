@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { startSession, stopSession } from './ui/commands';
+import { startSession, stopSession, createPoll, endPollCommand } from './ui/commands';
 import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
 import { ViewerPanel } from './ui/viewerPanel';
@@ -37,6 +37,14 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('jupyterLiveShare.stopSession', () =>
       stopSession(statusBarManager!, sessionViewProvider)
     )
+  );
+
+  // Poll commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jupyterLiveShare.createPoll', () => createPoll(sessionViewProvider))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jupyterLiveShare.endPoll', () => endPollCommand(sessionViewProvider))
   );
 
   // Viewer Panel (학생용)

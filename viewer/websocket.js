@@ -109,9 +109,15 @@ const WsClient = (() => {
     return ws && ws.readyState === WebSocket.OPEN;
   }
 
+  function send(type, data) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type, data }));
+  }
+
   return {
     connect,
     disconnect,
     isConnected,
+    send,
   };
 })();

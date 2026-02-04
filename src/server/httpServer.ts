@@ -5,6 +5,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { Logger } from '../utils/logger';
 import { getWatchMode, getCurrentFileUri, getCurrentFileName, getCurrentContent } from '../notebook/watcher';
+import { startPoll, endPoll } from './wsServer';
 
 let server: http.Server | null = null;
 let app: express.Express | null = null;
@@ -78,6 +79,18 @@ export function startHttpServer(port: number): Promise<http.Server> {
     const viewerPath = path.join(__dirname, 'viewer');
     app.use(express.static(viewerPath));
 
+    app.use(express.json());
+
+    // Localhost-only middleware for API routes
+    const requireLocalhost: express.RequestHandler = (req, res, next) => {
+      const addr = req.socket.remoteAddress;
+      if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') {
+        next();
+      } else {
+        res.status(403).json({ error: 'Forbidden' });
+      }
+    };
+
     // Health check
     app.get('/health', (_req, res) => {
       res.json({
@@ -107,6 +120,28 @@ export function startHttpServer(port: number): Promise<http.Server> {
       res.setHeader('Content-Type', `${contentType}; charset=utf-8`);
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       res.send(current.content);
+    });
+
+    // Poll API (VS Code에서 사용)
+    app.post('/api/poll/start', requireLocalhost, (req, res) => {
+      const { question, optionCount } = req.body;
+      if (!question || typeof question !== 'string') {
+        res.status(400).json({ error: 'question is required' });
+        return;
+      }
+      const count = Math.min(Math.max(Number(optionCount) || 2, 2), 5);
+      const pollId = Date.now().toString();
+      startPoll(question.trim(), count, pollId);
+      res.json({ success: true, pollId });
+    });
+
+    app.post('/api/poll/end', requireLocalhost, (_req, res) => {
+      const result = endPoll();
+      if (!result) {
+        res.status(404).json({ error: 'No active poll' });
+        return;
+      }
+      res.json({ success: true, ...result });
     });
 
     // 뷰어 진입점

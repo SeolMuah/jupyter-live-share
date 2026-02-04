@@ -6,6 +6,7 @@ interface SessionState {
   pin?: string;
   viewerCount: number;
   fileName?: string;
+  pollActive?: boolean;
 }
 
 export class SessionViewProvider implements vscode.TreeDataProvider<SessionItem> {
@@ -84,6 +85,29 @@ export class SessionViewProvider implements vscode.TreeDataProvider<SessionItem>
         'File',
         this.state.fileName,
         vscode.TreeItemCollapsibleState.None
+      ));
+    }
+
+    // Poll controls
+    if (this.state.pollActive) {
+      items.push(new SessionItem(
+        'End Poll',
+        'Click to end current poll',
+        vscode.TreeItemCollapsibleState.None,
+        {
+          command: 'jupyterLiveShare.endPoll',
+          title: 'End Poll',
+        }
+      ));
+    } else {
+      items.push(new SessionItem(
+        'Create Poll',
+        'Click to start a poll',
+        vscode.TreeItemCollapsibleState.None,
+        {
+          command: 'jupyterLiveShare.createPoll',
+          title: 'Create Poll',
+        }
       ));
     }
 

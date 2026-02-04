@@ -46,22 +46,8 @@ export async function startSession(
   const config = getConfig();
 
   try {
-    // 선택적 PIN 설정
-    const pinInput = await vscode.window.showInputBox({
-      prompt: 'Set a session PIN (optional, leave empty for no PIN)',
-      placeHolder: '1234',
-      password: false,
-      validateInput: (value) => {
-        if (value && !/^\d{4,6}$/.test(value)) {
-          return 'PIN must be 4-6 digits';
-        }
-        return undefined;
-      },
-    });
-
-    // ESC 취소가 아닌 빈 값은 PIN 없음으로 처리
-    if (pinInput === undefined) return; // ESC pressed
-    const pin = pinInput || null;
+    // PIN 없이 바로 시작
+    const pin: string | null = null;
 
     // 1. HTTP 서버 시작
     await vscode.window.withProgress(
@@ -153,6 +139,68 @@ export async function stopSession(
   vscode.window.showInformationMessage('Jupyter Live Share session stopped.');
 }
 
+export async function createPoll(sidebarView?: SessionViewProvider) {
+  const config = getConfig();
+
+  const question = await vscode.window.showInputBox({
+    prompt: 'Enter poll question',
+    placeHolder: 'e.g. How well do you understand?',
+  });
+  if (!question) return;
+
+  const optionCountStr = await vscode.window.showQuickPick(
+    ['2', '3', '4', '5'],
+    { placeHolder: 'Number of options' }
+  );
+  if (!optionCountStr) return;
+
+  const optionCount = parseInt(optionCountStr);
+
+  try {
+    const postData = JSON.stringify({ question, optionCount });
+    const url = `http://localhost:${config.port}/api/poll/start`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: postData,
+    });
+
+    if (response.ok) {
+      sidebarView?.updateState({ pollActive: true });
+      vscode.window.showInformationMessage(`Poll started: "${question}"`);
+    } else {
+      const data = await response.json() as { error?: string };
+      vscode.window.showErrorMessage(`Failed to start poll: ${data.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to start poll: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export async function endPollCommand(sidebarView?: SessionViewProvider) {
+  const config = getConfig();
+
+  try {
+    const url = `http://localhost:${config.port}/api/poll/end`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (response.ok) {
+      sidebarView?.updateState({ pollActive: false });
+      vscode.window.showInformationMessage('Poll ended.');
+    } else {
+      const data = await response.json() as { error?: string };
+      vscode.window.showErrorMessage(`Failed to end poll: ${data.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to end poll: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function cleanupSession(
   statusBar: StatusBarManager,
   sidebarView?: SessionViewProvider
@@ -176,6 +224,7 @@ async function cleanupSession(
     pin: undefined,
     viewerCount: 0,
     fileName: undefined,
+    pollActive: false,
   });
 
   Logger.info('Session cleaned up');

@@ -7,10 +7,34 @@ export interface WsMessage {
   data: unknown;
 }
 
+interface ClientMeta {
+  authenticated: boolean;
+  isTeacher: boolean;
+  nickname: string | null;
+  lastMessageTimes: number[];
+}
+
+interface PollState {
+  pollId: string;
+  question: string;
+  optionCount: number;
+  votes: number[];
+  voterChoices: Map<WebSocket, number>;
+}
+
 let wss: WebSocket.Server | null = null;
 let viewerCount = 0;
 let onViewerCountChange: ((count: number) => void) | null = null;
 let sessionPin: string | null = null;
+let clientMeta: Map<WebSocket, ClientMeta> = new Map();
+let currentPoll: PollState | null = null;
+let chatMessageId = 0;
+
+// Rate limit constants
+const RATE_LIMIT_WINDOW = 10000; // 10 seconds
+const RATE_LIMIT_MAX = 5; // max 5 messages per window
+const RATE_LIMIT_MIN_INTERVAL = 500; // min 500ms between messages
+const MAX_MESSAGE_LENGTH = 500;
 
 export function setSessionPin(pin: string | null) {
   sessionPin = pin;
@@ -24,14 +48,87 @@ export function getViewerCount(): number {
   return viewerCount;
 }
 
+export function getCurrentPollState(): PollState | null {
+  if (!currentPoll) return null;
+  return {
+    pollId: currentPoll.pollId,
+    question: currentPoll.question,
+    optionCount: currentPoll.optionCount,
+    votes: [...currentPoll.votes],
+    voterChoices: currentPoll.voterChoices, // not cloned, used only for read
+  };
+}
+
+function isLocalAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function checkRateLimit(meta: ClientMeta): string | null {
+  const now = Date.now();
+
+  // Check minimum interval
+  if (meta.lastMessageTimes.length > 0) {
+    const lastTime = meta.lastMessageTimes[meta.lastMessageTimes.length - 1];
+    if (now - lastTime < RATE_LIMIT_MIN_INTERVAL) {
+      return 'Too fast. Please wait a moment.';
+    }
+  }
+
+  // Remove old entries outside the window
+  meta.lastMessageTimes = meta.lastMessageTimes.filter(t => now - t < RATE_LIMIT_WINDOW);
+
+  // Check max messages in window
+  if (meta.lastMessageTimes.length >= RATE_LIMIT_MAX) {
+    return 'Too many messages. Please wait a few seconds.';
+  }
+
+  meta.lastMessageTimes.push(now);
+  return null;
+}
+
+export function startPoll(question: string, optionCount: number, pollId: string): void {
+  currentPoll = {
+    pollId,
+    question,
+    optionCount,
+    votes: new Array(optionCount).fill(0),
+    voterChoices: new Map(),
+  };
+  broadcast('poll:start', { pollId, question, optionCount });
+  Logger.info(`Poll started: "${question}" with ${optionCount} options`);
+}
+
+export function endPoll(): { pollId: string; finalVotes: number[]; totalVoters: number } | null {
+  if (!currentPoll) return null;
+  const result = {
+    pollId: currentPoll.pollId,
+    finalVotes: [...currentPoll.votes],
+    totalVoters: currentPoll.voterChoices.size,
+  };
+  broadcast('poll:end', result);
+  Logger.info(`Poll ended: "${currentPoll.question}"`);
+  currentPoll = null;
+  return result;
+}
+
 export function startWsServer(
   httpServer: http.Server,
   maxViewers: number
 ): WebSocket.Server {
   wss = new WebSocket.Server({ server: httpServer });
 
-  wss.on('connection', (ws) => {
-    let authenticated = !sessionPin; // PIN 없으면 바로 인증
+  wss.on('connection', (ws, req) => {
+    const remoteAddress = req.socket.remoteAddress;
+    const isTeacher = isLocalAddress(remoteAddress);
+
+    const meta: ClientMeta = {
+      authenticated: !sessionPin,
+      isTeacher,
+      nickname: isTeacher ? 'Teacher' : null,
+      lastMessageTimes: [],
+    };
+    clientMeta.set(ws, meta);
 
     ws.on('message', (raw) => {
       try {
@@ -40,32 +137,117 @@ export function startWsServer(
         if (msg.type === 'join') {
           const joinData = msg.data as { pin?: string };
 
-          // PIN 검증
+          // PIN verification
           if (sessionPin && joinData.pin !== sessionPin) {
             sendTo(ws, 'join:result', { success: false, error: 'Invalid PIN' });
             ws.close(4001, 'Invalid PIN');
             return;
           }
 
-          // 최대 접속자 확인
+          // Max viewers check
           if (viewerCount >= maxViewers) {
             sendTo(ws, 'join:result', { success: false, error: 'Session is full' });
             ws.close(4002, 'Session full');
             return;
           }
 
-          authenticated = true;
+          meta.authenticated = true;
           viewerCount++;
-          Logger.info(`Viewer connected (total: ${viewerCount})`);
+          Logger.info(`Viewer connected (total: ${viewerCount}, isTeacher: ${isTeacher})`);
 
           sendTo(ws, 'join:result', { success: true });
           broadcast('viewers:count', { count: viewerCount });
           onViewerCountChange?.(viewerCount);
 
-          // 현재 노트북 상태 전송은 watcher에서 처리
           if (onNewViewer) {
             onNewViewer(ws);
           }
+          return;
+        }
+
+        // All other messages require authentication
+        if (!meta.authenticated) return;
+
+        if (msg.type === 'join:name') {
+          const nameData = msg.data as { nickname: string };
+          const nickname = (nameData.nickname || '').trim().slice(0, 30);
+          if (nickname) {
+            meta.nickname = nickname;
+            Logger.info(`Viewer set name: ${nickname}`);
+          }
+          return;
+        }
+
+        if (msg.type === 'chat:message') {
+          if (!meta.nickname) {
+            sendTo(ws, 'chat:error', { error: 'Please set your name first.' });
+            return;
+          }
+
+          const chatData = msg.data as { text: string };
+          let text = (chatData.text || '').trim();
+          if (!text) return;
+          if (text.length > MAX_MESSAGE_LENGTH) {
+            text = text.slice(0, MAX_MESSAGE_LENGTH);
+          }
+
+          // Rate limit (teachers are exempt)
+          if (!meta.isTeacher) {
+            const rateLimitError = checkRateLimit(meta);
+            if (rateLimitError) {
+              sendTo(ws, 'chat:error', { error: rateLimitError });
+              return;
+            }
+          }
+
+          chatMessageId++;
+          broadcast('chat:broadcast', {
+            id: chatMessageId,
+            nickname: meta.nickname,
+            text,
+            timestamp: Date.now(),
+            isTeacher: meta.isTeacher,
+          });
+          return;
+        }
+
+        if (msg.type === 'poll:start') {
+          if (!meta.isTeacher) return; // Only teacher
+          const pollData = msg.data as { question: string; optionCount: number; pollId: string };
+          const question = (pollData.question || '').trim();
+          if (!question) return; // Reject empty question
+          const optionCount = Math.min(Math.max(pollData.optionCount || 2, 2), 5);
+          const pollId = pollData.pollId || Date.now().toString();
+          startPoll(question, optionCount, pollId);
+          return;
+        }
+
+        if (msg.type === 'poll:vote') {
+          if (!currentPoll) return;
+          const voteData = msg.data as { pollId: string; option: number };
+          if (voteData.pollId !== currentPoll.pollId) return;
+
+          const option = Math.floor(Number(voteData.option));
+          if (isNaN(option) || option < 0 || option >= currentPoll.optionCount) return;
+
+          // Duplicate vote check (server-side)
+          if (currentPoll.voterChoices.has(ws)) return;
+
+          currentPoll.voterChoices.set(ws, option);
+          currentPoll.votes[option]++;
+
+          broadcast('poll:results', {
+            pollId: currentPoll.pollId,
+            votes: [...currentPoll.votes],
+            totalVoters: currentPoll.voterChoices.size,
+          });
+          return;
+        }
+
+        if (msg.type === 'poll:end') {
+          if (!meta.isTeacher) return;
+          endPoll();
+          return;
         }
       } catch (err) {
         Logger.error('WebSocket message parse error', err);
@@ -73,20 +255,18 @@ export function startWsServer(
     });
 
     ws.on('close', () => {
-      if (authenticated) {
+      if (meta.authenticated) {
         viewerCount = Math.max(0, viewerCount - 1);
         Logger.info(`Viewer disconnected (total: ${viewerCount})`);
         broadcast('viewers:count', { count: viewerCount });
         onViewerCountChange?.(viewerCount);
       }
+      clientMeta.delete(ws);
     });
 
     ws.on('error', (err) => {
       Logger.error('WebSocket client error', err);
     });
-
-    // PIN 없으면 자동 인증 메시지 불필요
-    // 클라이언트가 join 이벤트를 보내야 함
   });
 
   Logger.info('WebSocket server started');
@@ -121,6 +301,9 @@ export function stopWsServer(): Promise<void> {
   return new Promise((resolve) => {
     viewerCount = 0;
     sessionPin = null;
+    clientMeta.clear();
+    currentPoll = null;
+    chatMessageId = 0;
 
     if (!wss) {
       resolve();
@@ -129,7 +312,6 @@ export function stopWsServer(): Promise<void> {
 
     const SHUTDOWN_TIMEOUT = 3000;
 
-    // 모든 클라이언트에게 세션 종료 알림
     broadcast('session:end', {});
 
     const forceShutdown = setTimeout(() => {
@@ -146,28 +328,27 @@ export function stopWsServer(): Promise<void> {
       resolve();
     });
 
-    // 기존 클라이언트 연결 즉시 종료
     terminateAllClients();
   });
 }
 
-/**
- * 동기적으로 WebSocket 서버를 강제 종료한다 (프로세스 exit 핸들러용)
- */
 export function forceStopWsServer(): void {
   viewerCount = 0;
   sessionPin = null;
+  clientMeta.clear();
+  currentPoll = null;
+  chatMessageId = 0;
 
   if (wss) {
     try {
       broadcast('session:end', {});
-    } catch { /* 무시 */ }
+    } catch { /* ignore */ }
 
     terminateAllClients();
 
     try {
       wss.close();
-    } catch { /* 무시 */ }
+    } catch { /* ignore */ }
     wss = null;
   }
   Logger.info('WebSocket server force-stopped');
@@ -178,6 +359,6 @@ function terminateAllClients(): void {
   for (const client of wss.clients) {
     try {
       client.terminate();
-    } catch { /* 무시 */ }
+    } catch { /* ignore */ }
   }
 }

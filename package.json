@@ -38,6 +38,16 @@
         "command": "jupyterLiveShare.openViewer",
         "title": "Open Viewer",
         "category": "Jupyter Live Share"
+      },
+      {
+        "command": "jupyterLiveShare.createPoll",
+        "title": "Create Poll",
+        "category": "Jupyter Live Share"
+      },
+      {
+        "command": "jupyterLiveShare.endPoll",
+        "title": "End Poll",
+        "category": "Jupyter Live Share"
       }
     ],
     "configuration": {

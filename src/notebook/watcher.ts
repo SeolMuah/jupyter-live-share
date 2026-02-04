@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { broadcast, sendTo, setOnNewViewer } from '../server/wsServer';
+import { broadcast, sendTo, setOnNewViewer, getCurrentPollState } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument } from './serializer';
 import { Logger } from '../utils/logger';
 import WebSocket from 'ws';
@@ -178,6 +178,21 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
       sendTo(ws, 'document:full', serialized);
     }
+
+    // 활성 설문이 있으면 새 접속자에게 전송
+    const poll = getCurrentPollState();
+    if (poll) {
+      sendTo(ws, 'poll:start', {
+        pollId: poll.pollId,
+        question: poll.question,
+        optionCount: poll.optionCount,
+      });
+      sendTo(ws, 'poll:results', {
+        pollId: poll.pollId,
+        votes: poll.votes,
+        totalVoters: poll.voterChoices.size,
+      });
+    }
   });
 }
 
@@ -232,6 +247,21 @@ function startWatchingTextDocument(document: vscode.TextDocument) {
       const activeCellIndex = editor?.selections.length ? editor.selections[0].start : 0;
       const serialized = serializeNotebook(currentNotebook, activeCellIndex);
       sendTo(ws, 'notebook:full', serialized);
+    }
+
+    // 활성 설문이 있으면 새 접속자에게 전송
+    const poll = getCurrentPollState();
+    if (poll) {
+      sendTo(ws, 'poll:start', {
+        pollId: poll.pollId,
+        question: poll.question,
+        optionCount: poll.optionCount,
+      });
+      sendTo(ws, 'poll:results', {
+        pollId: poll.pollId,
+        votes: poll.votes,
+        totalVoters: poll.voterChoices.size,
+      });
     }
   });
 }
