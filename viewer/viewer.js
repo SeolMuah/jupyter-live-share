@@ -461,7 +461,7 @@
     pollBanner.classList.remove('ended');
     pollBanner.style.display = 'block';
 
-    appendSystemChat('[Poll] ' + data.question);
+    appendSystemChat('[설문조사] ' + data.question);
 
     // Show End Poll button for teacher
     if (isTeacher && btnEndPoll) {
@@ -498,7 +498,7 @@
 
     // Show results in chat
     const parts = data.finalVotes.map((v, i) => `${i + 1}: ${v}`);
-    appendSystemChat(`[Poll ended] ${parts.join(' / ')} (total: ${data.totalVoters})`);
+    appendSystemChat(`[설문조사 종료] ${parts.join(' / ')} (총 ${data.totalVoters}명)`);
 
     // Disable buttons
     const buttons = pollButtons.querySelectorAll('button');
