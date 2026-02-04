@@ -497,37 +497,40 @@ footer label {
 }
 
 .chat-msg {
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--bg-cell);
-  border: 1px solid var(--border-color);
+  margin-bottom: 10px;
+  padding: 0;
   word-wrap: break-word;
 }
 
 .chat-msg-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   margin-bottom: 2px;
 }
 
 .chat-nickname {
-  font-weight: 600;
-  font-size: 0.8rem;
-  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
 .chat-time {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: var(--text-muted);
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .chat-text {
   font-size: 0.85rem;
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: 1.5;
+  padding: 4px 8px;
+  background: var(--bg-cell);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
 }
 
 .chat-system {
