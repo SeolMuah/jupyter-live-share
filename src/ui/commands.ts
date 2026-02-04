@@ -100,6 +100,7 @@ export async function startSession(
         sidebarView?.updateState({
           isRunning: true,
           url: tunnelUrl,
+          port: config.port,
           pin: pin || undefined,
           viewerCount: 0,
           fileName,
@@ -221,6 +222,7 @@ async function cleanupSession(
   sidebarView?.updateState({
     isRunning: false,
     url: undefined,
+    port: undefined,
     pin: undefined,
     viewerCount: 0,
     fileName: undefined,

@@ -87,7 +87,8 @@
       "jupyterLiveShare": [
         {
           "id": "jupyterLiveShare.sessionView",
-          "name": "Session"
+          "name": "Session",
+          "type": "webview"
         }
       ]
     }

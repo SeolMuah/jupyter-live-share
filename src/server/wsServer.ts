@@ -10,6 +10,7 @@ export interface WsMessage {
 interface ClientMeta {
   authenticated: boolean;
   isTeacher: boolean;
+  isTeacherPanel: boolean;
   nickname: string | null;
   lastMessageTimes: number[];
 }
@@ -125,6 +126,7 @@ export function startWsServer(
     const meta: ClientMeta = {
       authenticated: !sessionPin,
       isTeacher,
+      isTeacherPanel: false,
       nickname: isTeacher ? 'Teacher' : null,
       lastMessageTimes: [],
     };
@@ -135,7 +137,35 @@ export function startWsServer(
         const msg: WsMessage = JSON.parse(raw.toString());
 
         if (msg.type === 'join') {
-          const joinData = msg.data as { pin?: string };
+          const joinData = msg.data as { pin?: string; teacherPanel?: boolean };
+
+          // Teacher Panel connection (sidebar WebSocket)
+          if (joinData.teacherPanel && meta.isTeacher) {
+            meta.authenticated = true;
+            meta.isTeacherPanel = true;
+            meta.nickname = 'Teacher';
+            sendTo(ws, 'join:result', { success: true });
+            // Send current viewer count
+            sendTo(ws, 'viewers:count', { count: viewerCount });
+            // Send current poll state if active
+            if (currentPoll) {
+              sendTo(ws, 'poll:start', {
+                pollId: currentPoll.pollId,
+                question: currentPoll.question,
+                optionCount: currentPoll.optionCount,
+              });
+              sendTo(ws, 'poll:results', {
+                pollId: currentPoll.pollId,
+                votes: [...currentPoll.votes],
+                totalVoters: currentPoll.voterChoices.size,
+              });
+            }
+            // Don't increment viewerCount or broadcast viewers:count
+            if (onNewViewer) {
+              onNewViewer(ws);
+            }
+            return;
+          }
 
           // PIN verification
           if (sessionPin && joinData.pin !== sessionPin) {
@@ -255,7 +285,7 @@ export function startWsServer(
     });
 
     ws.on('close', () => {
-      if (meta.authenticated) {
+      if (meta.authenticated && !meta.isTeacherPanel) {
         viewerCount = Math.max(0, viewerCount - 1);
         Logger.info(`Viewer disconnected (total: ${viewerCount})`);
         broadcast('viewers:count', { count: viewerCount });

@@ -16,7 +16,7 @@ npm run build
 npx @vscode/vsce package
 ```
 
-`jupyter-live-share-0.1.0.vsix` 파일이 생성됩니다.
+`jupyter-live-share-0.1.1.vsix` 파일이 생성됩니다.
 
 ### 1.2 배포 방법
 
@@ -40,7 +40,7 @@ npx @vscode/vsce package
 **방법 B: 명령줄**
 
 ```bash
-code --install-extension jupyter-live-share-0.1.0.vsix
+code --install-extension jupyter-live-share-0.1.1.vsix
 ```
 
 ### 1.4 교실 대량 설치 스크립트
@@ -50,7 +50,7 @@ code --install-extension jupyter-live-share-0.1.0.vsix
 ```bat
 @echo off
 echo Jupyter Live Share Extension 설치 중...
-code --install-extension "%~dp0jupyter-live-share-0.1.0.vsix" --force
+code --install-extension "%~dp0jupyter-live-share-0.1.1.vsix" --force
 if %errorlevel% equ 0 (
     echo 설치 완료! VS Code를 재시작하세요.
 ) else (
@@ -70,18 +70,18 @@ GitHub 저장소의 Releases 기능을 활용하여 버전별로 `.vsix` 파일�
 ### 2.1 Release 생성 (웹)
 
 1. GitHub 저장소 → **Releases** → **"Create a new release"**
-2. Tag: `v0.1.0`
-3. Title: `v0.1.0 - 초기 릴리스`
+2. Tag: `v0.1.1`
+3. Title: `v0.1.1 - 초기 릴리스`
 4. Description: 변경사항 작성
-5. **Attach binaries**: `jupyter-live-share-0.1.0.vsix` 파일 첨부
+5. **Attach binaries**: `jupyter-live-share-0.1.1.vsix` 파일 첨부
 6. **Publish release**
 
 ### 2.2 Release 생성 (CLI)
 
 ```bash
 # GitHub CLI 설치 필요 (https://cli.github.com/)
-gh release create v0.1.0 jupyter-live-share-0.1.0.vsix \
-  --title "v0.1.0 - 초기 릴리스" \
+gh release create v0.1.1 jupyter-live-share-0.1.1.vsix \
+  --title "v0.1.1 - 초기 릴리스" \
   --notes "Jupyter Notebook 실시간 공유 Extension"
 ```
 
@@ -131,7 +131,7 @@ npm run build
 npx @vscode/vsce package
 
 # Open VSX에 배포
-ovsx publish jupyter-live-share-0.1.0.vsix -p <YOUR_TOKEN>
+ovsx publish jupyter-live-share-0.1.1.vsix -p <YOUR_TOKEN>
 ```
 
 ### 3.5 확인
@@ -163,7 +163,7 @@ VS Code는 기본적으로 Microsoft 마켓플레이스를 사용합니다. Open
 ### 4.1 정적 파일 호스팅
 
 ```
-https://your-school-site.com/extensions/jupyter-live-share-0.1.0.vsix
+https://your-school-site.com/extensions/jupyter-live-share-0.1.1.vsix
 ```
 
 학생에게 다운로드 링크를 공유하면 됩니다.
@@ -173,7 +173,7 @@ https://your-school-site.com/extensions/jupyter-live-share-0.1.0.vsix
 ```html
 <h2>Jupyter Live Share Extension 설치</h2>
 <ol>
-  <li><a href="jupyter-live-share-0.1.0.vsix">Extension 다운로드</a></li>
+  <li><a href="jupyter-live-share-0.1.1.vsix">Extension 다운로드</a></li>
   <li>VS Code 열기 → Ctrl+Shift+X → ... → "Install from VSIX..."</li>
   <li>다운로드받은 파일 선택 → VS Code 재시작</li>
 </ol>
@@ -210,7 +210,7 @@ https://your-school-site.com/extensions/jupyter-live-share-0.1.0.vsix
 
 ```bash
 # 1. 버전 올리기
-npm version patch  # 0.1.0 → 0.1.1
+npm version patch  # 0.1.1 → 0.1.1
 
 # 2. 빌드 + 패키징
 npm run build

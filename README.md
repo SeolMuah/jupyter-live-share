@@ -6,8 +6,8 @@
 
 - **Jupyter Notebook 실시간 공유** (`.ipynb`): 셀 편집, 실행 결과, 셀 추가/삭제가 실시간 반영
 - **텍스트 파일 공유** (`.py`, `.txt`, `.md` 등): 구문 하이라이팅 및 Markdown 렌더링 지원
-- **실시간 채팅**: 선생님과 학생 간 메시지 교환 (스팸 방지 Rate Limiting)
-- **실시간 설문조사 (Poll)**: 질문 + 2~5개 선택지, 실시간 막대 그래프 결과 표시
+- **실시간 채팅**: 선생님은 VS Code 사이드바에서, 학생은 브라우저에서 메시지 교환 (스팸 방지 Rate Limiting)
+- **실시간 설문조사 (Poll)**: 사이드바 인라인 폼 또는 Command Palette로 생성, 실시간 막대 그래프 결과 표시
 - **Cloudflare Tunnel**: 별도 서버 없이 외부 HTTPS URL로 접속 가능
 - **50명 동시 접속**: 교실 규모의 동시 접속자 지원
 - **다크/라이트 모드**: 뷰어에서 테마 전환 지원
@@ -21,7 +21,7 @@
 ```
 
 1. 선생님이 VS Code에서 `Start Session` 실행
-2. 로컬 서버(기본 포트 3000)가 시작되고 Cloudflare Tunnel로 외부 URL 생성
+2. 로컬 서버(기본 포트 48632)가 시작되고 Cloudflare Tunnel로 외부 URL 생성
 3. 학생들이 브라우저에서 해당 URL로 접속하고 이름을 입력
 4. 선생님이 파일을 편집하면 WebSocket을 통해 실시간 전송
 5. 채팅과 설문조사로 양방향 소통
@@ -47,23 +47,30 @@ VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
 ### 세션 시작
 
 1. VS Code에서 `.ipynb`, `.py`, `.md`, `.txt` 등 파일 열기
-2. `Ctrl+Shift+P` → `Jupyter Live Share: Start Session`
+2. 왼쪽 사이드바의 **Jupyter Live Share** 패널에서 **Start Session** 클릭
+   - 또는 `Ctrl+Shift+P` → `Jupyter Live Share: Start Session`
 3. 상태바에 표시되는 URL을 학생들에게 공유 (자동으로 클립보드에 복사됨)
+4. 사이드바에 세션 정보(URL, 파일명, 접속자 수) + 채팅 패널이 표시됨
 
 ### 세션 종료
 
-- `Ctrl+Shift+P` → `Jupyter Live Share: Stop Session`
-- 또는 상태바의 Jupyter Live Share 아이콘 클릭
+- 사이드바의 **Stop Session** 버튼 클릭
+- 또는 `Ctrl+Shift+P` → `Jupyter Live Share: Stop Session`
 
 ### 실시간 채팅
 
-학생과 선생님 모두 브라우저 뷰어에서 채팅을 사용할 수 있습니다.
+**선생님 (VS Code 사이드바):**
+- 세션 시작 시 사이드바 하단에 채팅 영역이 자동으로 표시됨
+- 사이드바에서 직접 메시지 입력 및 전송
+- "Teacher" 닉네임으로 자동 설정 (접속자 수에 포함되지 않음)
 
+**학생 (브라우저 뷰어):**
 - 뷰어 하단의 **Chat** 버튼을 클릭하면 오른쪽에 채팅 패널이 열림
-- 학생은 접속 시 이름을 입력해야 채팅 가능 (localStorage에 저장되어 재접속 시 자동 입력)
-- 선생님(localhost 접속)은 자동으로 "Teacher"로 표시
+- 접속 시 이름을 입력해야 채팅 가능 (localStorage에 저장되어 재접속 시 자동 입력)
+
+**공통:**
 - 설문 시작/종료 시 채팅에 시스템 메시지가 자동 표시 (결과 포함)
-- 스팸 방지: 학생은 10초당 5개, 최소 500ms 간격으로 메시지 전송 제한
+- 스팸 방지: 학생은 10초당 5개, 최소 500ms 간격으로 메시지 전송 제한 (선생님은 제한 없음)
 - 메시지 최대 500자
 
 ### 실시간 설문조사 (Poll)
@@ -98,7 +105,7 @@ VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
 
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
-| `jupyterLiveShare.port` | `3000` | 로컬 서버 포트 |
+| `jupyterLiveShare.port` | `48632` | 로컬 서버 포트 |
 | `jupyterLiveShare.maxViewers` | `100` | 최대 동시 접속자 수 |
 | `jupyterLiveShare.tunnelProvider` | `cloudflare` | 터널 제공자 (`cloudflare` 또는 `none`) |
 
@@ -127,7 +134,7 @@ jupyter-live-share/
 │   ├── extension.ts          # Extension 진입점
 │   ├── server/               # HTTP + WebSocket 서버
 │   ├── notebook/             # 노트북 변경 감지 + 직렬화
-│   ├── ui/                   # StatusBar, Sidebar, Commands
+│   ├── ui/                   # StatusBar, Sidebar(WebviewView), Commands
 │   └── utils/                # 설정, 로깅
 ├── viewer/                   # 브라우저 뷰어 (Vanilla JS)
 ├── bin/                      # cloudflared 바이너리
@@ -151,7 +158,7 @@ npm run build
 
 1. Development Host 창에서 `.ipynb` 파일 열기
 2. `Ctrl+Shift+P` → **"Jupyter Live Share: Start Session"**
-3. 브라우저에서 `http://localhost:3000` 접속
+3. 브라우저에서 `http://localhost:48632` 접속
 4. 이름 입력 후 Join (localhost 접속 시 자동으로 Teacher로 진입)
 5. 확인:
 
@@ -166,17 +173,18 @@ npm run build
 
 ### 채팅 테스트
 
-1. 브라우저 2개 탭 열기 (탭 1: `http://localhost:3000` = 선생님, 탭 2: 시크릿 창으로 접속 = 학생)
-2. 학생 탭에서 이름 입력 후 Join
+1. 브라우저에서 `http://localhost:48632` 접속 (학생 역할)
+2. 이름 입력 후 Join
 3. 확인:
 
 | 테스트 | 동작 | 확인 |
 |--------|------|------|
-| 채팅 패널 | Chat 버튼 클릭 | 오른쪽에 채팅 패널 슬라이드 |
-| 메시지 전송 | 메시지 입력 후 Send | 양쪽 탭에서 메시지 표시 |
+| 사이드바 채팅 | VS Code 사이드바에서 메시지 입력 | 브라우저에 "Teacher" 메시지 표시 |
+| 학생→사이드바 | 브라우저에서 메시지 전송 | VS Code 사이드바 채팅에 학생 메시지 표시 |
+| 브라우저 채팅 | Chat 버튼 클릭 | 오른쪽에 채팅 패널 슬라이드 |
 | 닉네임 표시 | 선생님/학생 메시지 전송 | 닉네임 + 시간 표시 |
 | Rate Limit | 학생 탭에서 빠르게 연속 전송 | 에러 메시지 표시 |
-| 읽지 않은 알림 | 채팅 패널 닫은 상태에서 메시지 수신 | Chat 버튼에 빨간 뱃지 |
+| 접속자 수 | 사이드바 Viewers 확인 | Teacher Panel은 접속자 수에 미포함 |
 
 ### 설문조사 테스트
 
@@ -206,7 +214,7 @@ npm run build
 **Step 2: WebView 뷰어 열기**
 
 1. `Ctrl+Shift+P` → **"Jupyter Live Share: Open Viewer"**
-2. URL 입력: `http://localhost:3000` (로컬) 또는 `https://xxx.trycloudflare.com` (외부)
+2. URL 입력: `http://localhost:48632` (로컬) 또는 `https://xxx.trycloudflare.com` (외부)
 3. VS Code 옆 탭에 뷰어 패널이 열림
 
 **Step 3: 확인**
@@ -240,7 +248,7 @@ npm run build
 ### 부하 테스트
 
 ```bash
-node test/load/load-test.js --url ws://localhost:3000 --clients 50
+node test/load/load-test.js --url ws://localhost:48632 --clients 50
 ```
 
 ### 문제 해결
@@ -262,8 +270,8 @@ vsce package       # VSIX 패키징
 
 ## 관련 문서
 
-- [DEPLOYMENT.md](DEPLOYMENT.md) - 배포 가이드 (VSIX 패키징, Marketplace, 교실 대량 배포)
-- [PUBLISHING.md](PUBLISHING.md) - Extension 배포 방법 (VSIX 직접 배포, Open VSX, GitHub Releases)
+- [docs/PUBLISHING.md](docs/PUBLISHING.md) - Extension 배포 방법 (VSIX 직접 배포, Open VSX, GitHub Releases)
+- [docs/prd_jupyter_live_share.md](docs/prd_jupyter_live_share.md) - 제품 요구사항 문서 (PRD)
 
 ## 라이선스
 

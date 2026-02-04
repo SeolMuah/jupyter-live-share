@@ -21,11 +21,31 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarManager = new StatusBarManager();
   context.subscriptions.push(statusBarManager);
 
-  // Sidebar TreeView
+  // Sidebar WebviewView
   const sessionViewProvider = new SessionViewProvider(context.extensionUri);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('jupyterLiveShare.sessionView', sessionViewProvider)
+    vscode.window.registerWebviewViewProvider(
+      SessionViewProvider.viewType,
+      sessionViewProvider
+    )
   );
+
+  // Handle messages from sidebar webview
+  sessionViewProvider.setOnCommand((command, data) => {
+    switch (command) {
+      case 'startSession':
+        startSession(context, statusBarManager!, sessionViewProvider);
+        break;
+      case 'stopSession':
+        stopSession(statusBarManager!, sessionViewProvider);
+        break;
+      case 'copyUrl':
+        if (data && typeof data === 'object' && 'url' in data) {
+          vscode.env.clipboard.writeText(String((data as { url: string }).url));
+        }
+        break;
+    }
+  });
 
   // Commands
   context.subscriptions.push(
