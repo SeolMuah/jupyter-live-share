@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
+import * as crypto from 'crypto';
 import { Logger } from '../utils/logger';
 
 export class ViewerPanel {
@@ -70,20 +70,13 @@ export class ViewerPanel {
   private getHtmlContent(wsUrl: string): string {
     const webview = this.panel.webview;
 
-    // viewer 파일 URI 해석 (dist/viewer/ 또는 viewer/)
+    // viewer 파일 URI 해석 (dist/viewer/)
     const viewerBase = vscode.Uri.joinPath(this.extensionUri, 'dist', 'viewer');
-    const viewerFallback = vscode.Uri.joinPath(this.extensionUri, 'viewer');
 
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'style.css'));
     const rendererUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'renderer.js'));
     const websocketUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'websocket.js'));
     const viewerUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'viewer.js'));
-
-    // 개발 모드 fallback
-    const styleFallback = webview.asWebviewUri(vscode.Uri.joinPath(viewerFallback, 'style.css'));
-    const rendererFallback = webview.asWebviewUri(vscode.Uri.joinPath(viewerFallback, 'renderer.js'));
-    const websocketFallback = webview.asWebviewUri(vscode.Uri.joinPath(viewerFallback, 'websocket.js'));
-    const viewerFallbackUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerFallback, 'viewer.js'));
 
     const nonce = getNonce();
 
@@ -126,8 +119,7 @@ export class ViewerPanel {
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
   <!-- WebSocket URL 주입 -->
   <script nonce="${nonce}">
-    window.__WS_URL__ = '${wsUrl}';
-    window.__IS_WEBVIEW__ = true;
+    window.__WS_URL__ = ${JSON.stringify(wsUrl)};
   </script>
 </head>
 <body>
@@ -188,10 +180,5 @@ export class ViewerPanel {
 }
 
 function getNonce(): string {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('hex');
 }
