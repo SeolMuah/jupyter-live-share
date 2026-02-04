@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { startSession, stopSession } from './ui/commands';
 import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
+import { ViewerPanel } from './ui/viewerPanel';
 import { Logger } from './utils/logger';
 
 let statusBarManager: StatusBarManager | undefined;
@@ -29,6 +30,13 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('jupyterLiveShare.stopSession', () =>
       stopSession(statusBarManager!, sessionViewProvider)
+    )
+  );
+
+  // Viewer Panel (학생용)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jupyterLiveShare.openViewer', () =>
+      ViewerPanel.createOrShow(context)
     )
   );
 }

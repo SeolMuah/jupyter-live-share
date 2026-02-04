@@ -14,7 +14,8 @@
   ],
   "activationEvents": [
     "onNotebook:jupyter-notebook",
-    "onCommand:jupyterLiveShare.startSession"
+    "onCommand:jupyterLiveShare.startSession",
+    "onCommand:jupyterLiveShare.openViewer"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -27,6 +28,11 @@
       {
         "command": "jupyterLiveShare.stopSession",
         "title": "Stop Session",
+        "category": "Jupyter Live Share"
+      },
+      {
+        "command": "jupyterLiveShare.openViewer",
+        "title": "Open Viewer",
         "category": "Jupyter Live Share"
       }
     ],

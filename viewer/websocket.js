@@ -11,6 +11,7 @@ const WsClient = (() => {
   const MAX_RECONNECT_DELAY = 30000; // 30s max
 
   function getWsUrl() {
+    if (window.__WS_URL__) return window.__WS_URL__;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${location.host}`;
   }
