@@ -93,27 +93,105 @@ jupyter-live-share/
 └── test/                     # 테스트 코드
 ```
 
+## 테스트 방법
+
+### 사전 준비
+
+```bash
+cd jupyter-live-share
+npm install
+npm run build
+```
+
+1. VS Code에서 `jupyter-live-share` 폴더를 열고 `F5`로 **Extension Development Host** 실행
+2. 새로 열린 창에서 테스트 진행
+
+### 브라우저 뷰어 테스트
+
+1. Development Host 창에서 `.ipynb` 파일 열기
+2. `Ctrl+Shift+P` → **"Jupyter Live Share: Start Session"** → PIN 없이 Enter
+3. 브라우저에서 `http://localhost:3000` 접속
+4. 확인:
+
+| 테스트 | 호스트 동작 | 뷰어 확인 |
+|--------|-----------|----------|
+| 셀 편집 | 코드 셀에 타이핑 | 실시간 텍스트 반영 |
+| 셀 실행 | `Ctrl+Enter` | 출력 결과 표시 |
+| 셀 추가/삭제 | 셀 추가 또는 삭제 | 구조 변경 반영 |
+| 포커스 이동 | 다른 셀 클릭 | 활성 셀 하이라이트 이동 |
+| 마크다운 | 마크다운 셀 편집 | Markdown 렌더링 |
+| 수식 | `$E=mc^2$` 입력 | KaTeX 수식 렌더링 |
+
+### VS Code WebView 뷰어 테스트
+
+학생이 VS Code 내부에서 공유 화면을 보는 기능입니다.
+
+**Step 1: 호스트 시작**
+
+1. Development Host에서 `.ipynb` 파일 열기
+2. `Ctrl+Shift+P` → **"Start Session"** → 상태바에 `Live Share: 0명` 확인
+
+**Step 2: WebView 뷰어 열기**
+
+1. `Ctrl+Shift+P` → **"Jupyter Live Share: Open Viewer"**
+2. URL 입력: `http://localhost:3000` (로컬) 또는 `https://xxx.trycloudflare.com` (외부)
+3. VS Code 옆 탭에 뷰어 패널이 열림
+
+**Step 3: 확인**
+
+| 항목 | 예상 결과 |
+|------|----------|
+| 패널 | "Live Share Viewer" 탭이 열림 |
+| 연결 | "Connecting..." 후 사라짐 |
+| 렌더링 | 셀, 코드, 출력이 정상 표시 |
+| 접속자 수 | 호스트 상태바가 `1명`으로 증가 |
+| 실시간 편집 | 호스트 타이핑 → 뷰어 반영 |
+| 셀 실행 | 호스트 실행 → 출력 표시 |
+| 테마 | ☀️ 버튼으로 다크/라이트 전환 |
+| PIN | PIN 설정 시 PIN 입력 화면 표시 |
+| 재연결 | Open Viewer 재실행 → 기존 패널에서 새 URL 연결 |
+
+**Step 4: 파일 전환 테스트**
+
+1. 호스트가 `.ipynb` → `.py` 파일로 전환 → 뷰어에서 코드 문서 전환 확인
+2. `.py` 편집 → 실시간 반영 확인
+3. 다시 `.ipynb` 탭 → 뷰어 노트북으로 복귀
+
+### 다른 PC에서 테스트 (Cloudflare Tunnel)
+
+1. 호스트: **"Start Session"** → Tunnel URL 생성 (예: `https://xxx.trycloudflare.com`)
+2. 학생 PC: 브라우저에서 해당 URL 접속, 또는
+3. 학생 PC VS Code: **"Open Viewer"** → URL 입력
+
+> Cloudflare Quick Tunnel URL은 세션마다 변경됩니다.
+
+### 부하 테스트
+
+```bash
+node test/load/load-test.js --url ws://localhost:3000 --clients 50
+```
+
+### 문제 해결
+
+- **WebView 화면 비어있음**: `Ctrl+Shift+I` → Console에서 CSP 에러 확인, `npm run build` 재실행
+- **연결 안 됨**: 호스트 세션 실행 중인지, URL이 올바른지 확인
+- **"Connecting..."에서 멈춤**: 세션 재시작 또는 Tunnel URL 만료 확인
+
 ## 개발
 
 ```bash
-# 의존성 설치
-npm install
-
-# 개발 빌드
-npm run compile
-
-# 프로덕션 빌드
-npm run build
-
-# 감시 모드
-npm run watch
-
-# 린트
-npm run lint
-
-# VSIX 패키징
-vsce package
+npm install        # 의존성 설치
+npm run compile    # 개발 빌드
+npm run build      # 프로덕션 빌드
+npm run watch      # 감시 모드
+npm run lint       # 린트
+vsce package       # VSIX 패키징
 ```
+
+## 관련 문서
+
+- [DEPLOYMENT.md](DEPLOYMENT.md) - 배포 가이드 (VSIX 패키징, Marketplace, 교실 대량 배포)
+- [PUBLISHING.md](PUBLISHING.md) - Extension 배포 방법 (VSIX 직접 배포, Open VSX, GitHub Releases)
 
 ## 라이선스
 
