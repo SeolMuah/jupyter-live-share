@@ -4,7 +4,8 @@ import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocume
 import { Logger } from '../utils/logger';
 import WebSocket from 'ws';
 
-const DEBOUNCE_MS = 300;
+const CELL_DEBOUNCE_MS = 150;
+const TEXT_DEBOUNCE_MS = 100;
 const THROTTLE_MS = 200;
 
 let disposables: vscode.Disposable[] = [];
@@ -71,7 +72,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           const cellIndex = change.cell.index;
           const newSource = change.document.getText();
 
-          // debounce: 빠른 타이핑 시 300ms 내 마지막 변경만 전송
+          // debounce: 빠른 타이핑 시 마지막 변경만 전송
           const existing = debounceTimers.get(cellIndex);
           if (existing) clearTimeout(existing);
 
@@ -80,7 +81,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
             setTimeout(() => {
               broadcast('cell:update', { index: cellIndex, source: newSource });
               debounceTimers.delete(cellIndex);
-            }, DEBOUNCE_MS)
+            }, CELL_DEBOUNCE_MS)
           );
         }
 
@@ -254,7 +255,7 @@ function setupTextDocumentWatcher() {
     textDebounceTimer = setTimeout(() => {
       broadcast('document:update', { content: event.document.getText() });
       textDebounceTimer = null;
-    }, DEBOUNCE_MS);
+    }, TEXT_DEBOUNCE_MS);
   });
 
   (textWatcher as any).__textDocWatcher = true;

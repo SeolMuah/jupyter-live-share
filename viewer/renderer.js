@@ -1,6 +1,19 @@
 /* renderer.js - Notebook cell rendering */
 
 const Renderer = (() => {
+  const HIGHLIGHT_DEBOUNCE_MS = 300;
+  let highlightTimers = {};
+
+  /**
+   * Debounced highlight: 텍스트는 즉시 반영, 하이라이팅은 지연
+   */
+  function debouncedHighlight(key, element) {
+    if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
+    highlightTimers[key] = setTimeout(() => {
+      hljs.highlightElement(element);
+      delete highlightTimers[key];
+    }, HIGHLIGHT_DEBOUNCE_MS);
+  }
   /**
    * Render entire notebook
    */
@@ -220,26 +233,32 @@ const Renderer = (() => {
 
     const codeEl = cellEl.querySelector('.cell-source code');
     if (codeEl) {
+      // 텍스트 즉시 반영, 하이라이팅은 디바운스
       codeEl.textContent = source;
-      hljs.highlightElement(codeEl);
+      debouncedHighlight(`cell-${index}`, codeEl);
     }
 
-    // Markup cell
+    // Markup cell - Markdown 렌더링은 디바운스
     const markupEl = cellEl.querySelector('.cell-markup');
     if (markupEl) {
-      markupEl.innerHTML = DOMPurify.sanitize(marked.parse(source || ''));
-      markupEl.querySelectorAll('pre code').forEach((block) => {
-        hljs.highlightElement(block);
-      });
-      try {
-        renderMathInElement(markupEl, {
-          delimiters: [
-            { left: '$$', right: '$$', display: true },
-            { left: '$', right: '$', display: false },
-          ],
-          throwOnError: false,
+      const key = `markup-${index}`;
+      if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
+      highlightTimers[key] = setTimeout(() => {
+        markupEl.innerHTML = DOMPurify.sanitize(marked.parse(source || ''));
+        markupEl.querySelectorAll('pre code').forEach((block) => {
+          hljs.highlightElement(block);
         });
-      } catch (e) { /* ignore */ }
+        try {
+          renderMathInElement(markupEl, {
+            delimiters: [
+              { left: '$$', right: '$$', display: true },
+              { left: '$', right: '$', display: false },
+            ],
+            throwOnError: false,
+          });
+        } catch (e) { /* ignore */ }
+        delete highlightTimers[key];
+      }, HIGHLIGHT_DEBOUNCE_MS);
     }
   }
 
@@ -410,7 +429,29 @@ const Renderer = (() => {
     const label = badge ? badge.textContent : '';
     const languageId = getLangIdFromLabel(label);
 
-    renderDocumentContent(content, languageId, contentEl);
+    if (languageId === 'markdown') {
+      // Markdown: 전체 렌더링 디바운스
+      const key = 'doc-markdown';
+      if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
+      highlightTimers[key] = setTimeout(() => {
+        renderDocumentContent(content, languageId, contentEl);
+        delete highlightTimers[key];
+      }, HIGHLIGHT_DEBOUNCE_MS);
+    } else {
+      // 코드/텍스트: textContent 즉시 반영, 하이라이팅만 디바운스
+      const codeEl = contentEl.querySelector('code');
+      if (codeEl) {
+        codeEl.textContent = content || '';
+        const hljsLang = getHljsLanguage(languageId);
+        if (hljsLang) {
+          codeEl.className = `language-${hljsLang}`;
+          debouncedHighlight('doc-code', codeEl);
+        }
+      } else {
+        // code 요소가 없으면 전체 재렌더
+        renderDocumentContent(content, languageId, contentEl);
+      }
+    }
   }
 
   /**
