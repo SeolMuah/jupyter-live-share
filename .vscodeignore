@@ -3,8 +3,13 @@
 src/**
 test/**
 node_modules/**
+docs/**
+.claude/**
 .gitignore
 tsconfig.json
 webpack.config.js
 *.map
 .eslintrc.json
+token.txt
+CLAUDE.md
+*.vsix
