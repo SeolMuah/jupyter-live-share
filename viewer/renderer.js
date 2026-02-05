@@ -371,16 +371,13 @@ const Renderer = (() => {
 
     // Calculate approximate line height (1.5em = ~24px typically)
     const lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 24;
-    const scrollTarget = lineNumber * lineHeight;
+    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const scrollTarget = (lineNumber * lineHeight) + headerHeight;
 
-    // Scroll the main container
-    const container = document.getElementById('notebook-cells');
-    if (container) {
-      container.scrollTo({
-        top: scrollTarget,
-        behavior: 'smooth'
-      });
-    }
+    window.scrollTo({
+      top: scrollTarget,
+      behavior: 'smooth'
+    });
   }
 
   /**
@@ -388,15 +385,35 @@ const Renderer = (() => {
    * Works better for rendered content like markdown
    */
   function scrollToRatio(ratio) {
-    const container = document.getElementById('notebook-cells');
-    if (!container) return;
+    if (typeof ratio !== 'number' || isNaN(ratio)) return;
 
-    // 전체 스크롤 가능한 높이 계산
-    const maxScroll = container.scrollHeight - container.clientHeight;
-    const scrollTarget = maxScroll * ratio;
+    // 전체 스크롤 가능한 높이 계산 (window 기준)
+    const documentHeight = document.documentElement.scrollHeight;
+    const windowHeight = window.innerHeight;
+    const maxScroll = documentHeight - windowHeight;
 
-    container.scrollTo({
+    if (maxScroll <= 0) return; // 스크롤할 내용이 없음
+
+    const scrollTarget = maxScroll * Math.min(1, Math.max(0, ratio));
+
+    window.scrollTo({
       top: scrollTarget,
+      behavior: 'smooth'
+    });
+  }
+
+  /**
+   * Scroll notebook to match teacher's visible cell range
+   */
+  function scrollNotebookToCell(cellIndex) {
+    const cellEl = document.getElementById(`cell-${cellIndex}`);
+    if (!cellEl) return;
+
+    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const cellTop = cellEl.offsetTop;
+
+    window.scrollTo({
+      top: Math.max(0, cellTop - headerHeight - 8),
       behavior: 'smooth'
     });
   }
@@ -786,6 +803,7 @@ const Renderer = (() => {
     showTeacherCursor,
     scrollToLine,
     scrollToRatio,
+    scrollNotebookToCell,
     updateTeacherViewport,
   };
 })();

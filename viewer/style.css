@@ -160,7 +160,7 @@ header {
   color: var(--header-text);
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 200;
 }
 
 .header-left {
@@ -1005,47 +1005,36 @@ footer label {
 /* === Teacher Viewport Indicator === */
 .cell.teacher-viewport {
   position: relative;
+  box-shadow: inset 4px 0 0 0 #ff4444;
 }
 
-.cell.teacher-viewport::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: linear-gradient(180deg, #ff4444 0%, #ff6b6b 50%, #ff4444 100%);
-  border-radius: 2px;
-  animation: viewport-pulse 2s ease-in-out infinite;
-  z-index: 100;
-}
-
-.cell.teacher-viewport-start::after {
+.cell.teacher-viewport-start::before {
   content: '👀 선생님 화면';
   position: absolute;
-  left: 12px;
-  top: -12px;
-  font-size: 11px;
+  right: 8px;
+  top: 8px;
+  font-size: 10px;
   color: #fff;
   background: #ff4444;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
   white-space: nowrap;
   font-family: var(--font-sans);
   font-weight: 500;
-  z-index: 101;
-  box-shadow: 0 2px 8px rgba(255, 68, 68, 0.4);
+  z-index: 50;
+  box-shadow: 0 2px 6px rgba(255, 68, 68, 0.3);
+  animation: viewport-label-pulse 2s ease-in-out infinite;
 }
 
-@keyframes viewport-pulse {
+@keyframes viewport-label-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  50% { opacity: 0.7; }
 }
 
-[data-theme="dark"] .cell.teacher-viewport::before {
-  background: linear-gradient(180deg, #ff6b6b 0%, #ff8787 50%, #ff6b6b 100%);
+[data-theme="dark"] .cell.teacher-viewport {
+  box-shadow: inset 4px 0 0 0 #ff6b6b;
 }
 
-[data-theme="dark"] .cell.teacher-viewport-start::after {
+[data-theme="dark"] .cell.teacher-viewport-start::before {
   background: #ff6b6b;
 }

@@ -327,24 +327,24 @@
   // === Viewport Sync (선생님 화면 영역 동기화) ===
 
   function handleViewportSync(data) {
+    // Auto-scroll이 켜져 있을 때만 스크롤
+    const autoScroll = document.getElementById('auto-scroll');
+    const shouldScroll = autoScroll && autoScroll.checked;
+
     if (data.mode === 'notebook' && documentType === 'notebook') {
       // 뷰포트 인디케이터 업데이트 (선생님이 보는 셀 표시)
       Renderer.updateTeacherViewport(data.firstVisibleCell, data.lastVisibleCell);
 
-      // Auto-scroll이 켜져 있을 때만 스크롤
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked) {
-        const firstCell = document.getElementById(`cell-${data.firstVisibleCell}`);
-        if (firstCell) {
-          // 셀의 상단이 화면 상단에 오도록 스크롤 (center가 아닌 start)
-          firstCell.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (shouldScroll) {
+        // 스크롤 비율이 있으면 사용, 없으면 셀 기반 스크롤
+        if (typeof data.scrollRatio === 'number') {
+          Renderer.scrollToRatio(data.scrollRatio);
+        } else {
+          Renderer.scrollNotebookToCell(data.firstVisibleCell);
         }
       }
     } else if (data.mode === 'plaintext' && documentType === 'plaintext') {
-      // Auto-scroll이 켜져 있을 때만 스크롤
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked) {
-        // 스크롤 비율을 사용하여 동기화 (마크다운 렌더링 후에도 정확한 위치)
+      if (shouldScroll && typeof data.scrollRatio === 'number') {
         Renderer.scrollToRatio(data.scrollRatio);
       }
     }

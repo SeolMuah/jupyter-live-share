@@ -70,13 +70,18 @@ function setupNewViewerHandler() {
 
       // 새 뷰어에게 현재 뷰포트 정보 전송
       if (editor && editor.visibleRanges.length > 0) {
+        const totalCells = currentNotebook.cellCount;
         const firstVisibleCell = editor.visibleRanges[0].start;
-        const lastVisibleCell = editor.visibleRanges[0].end - 1;
+        const lastVisibleCell = Math.min(editor.visibleRanges[0].end - 1, totalCells - 1);
+        const scrollRatio = totalCells > 1 ? firstVisibleCell / (totalCells - 1) : 0;
+
         sendTo(ws, 'viewport:sync', {
           mode: 'notebook',
           firstVisibleCell,
           lastVisibleCell,
           focusedCell: activeCellIndex,
+          totalCells,
+          scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
         });
       }
     } else if (watchMode === 'plaintext' && currentTextDocument) {
@@ -239,8 +244,12 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       lastViewportTime = now;
 
       if (event.visibleRanges.length > 0) {
+        const totalCells = currentNotebook.cellCount;
         const firstVisibleCell = event.visibleRanges[0].start;
-        const lastVisibleCell = event.visibleRanges[0].end - 1;
+        const lastVisibleCell = Math.min(event.visibleRanges[0].end - 1, totalCells - 1);
+
+        // 스크롤 비율 계산 (0 ~ 1)
+        const scrollRatio = totalCells > 1 ? firstVisibleCell / (totalCells - 1) : 0;
 
         // 현재 포커스된 셀 정보도 함께 전송
         const editor = vscode.window.activeNotebookEditor;
@@ -251,6 +260,8 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           firstVisibleCell,
           lastVisibleCell,
           focusedCell,
+          totalCells,
+          scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
         });
       }
     })
