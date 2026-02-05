@@ -404,12 +404,24 @@
   }
 
   function trimChatDOM() {
-    while (chatMessages.children.length > MAX_CHAT_DOM) {
-      const first = chatMessages.firstChild;
-      if (first && first.classList && first.classList.contains('chat-poll-card') && !first.classList.contains('ended')) {
-        break;
+    // Count how many messages to remove (excluding active poll cards)
+    const children = Array.from(chatMessages.children);
+    const activePollCards = children.filter(el =>
+      el.classList.contains('chat-poll-card') && !el.classList.contains('ended')
+    );
+    const removableCount = children.length - activePollCards.length;
+    let toRemove = removableCount - MAX_CHAT_DOM;
+
+    if (toRemove <= 0) return;
+
+    // Remove oldest removable messages (skip active poll cards)
+    for (const child of children) {
+      if (toRemove <= 0) break;
+      const isActivePoll = child.classList.contains('chat-poll-card') && !child.classList.contains('ended');
+      if (!isActivePoll) {
+        chatMessages.removeChild(child);
+        toRemove--;
       }
-      chatMessages.removeChild(first);
     }
   }
 

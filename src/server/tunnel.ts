@@ -4,6 +4,14 @@ import * as fs from 'fs';
 import * as https from 'https';
 import { Logger } from '../utils/logger';
 
+// Bundled binaries included in the extension package
+const BUNDLED_BINARIES: Record<string, string> = {
+  'win32-x64': 'cloudflared.exe',
+  'darwin-x64': 'cloudflared-darwin-x64',
+  'darwin-arm64': 'cloudflared-darwin-arm64',
+};
+
+// Fallback download URLs if bundled binary is missing
 const CLOUDFLARED_URLS: Record<string, string> = {
   'win32-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
   'darwin-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz',
@@ -28,9 +36,22 @@ export class TunnelManager {
     const cloudflaredPath = await this.ensureBinary();
 
     return new Promise((resolve, reject) => {
+      let settled = false; // Prevent double resolve/reject
+
+      const settle = (success: boolean, value: string | Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (success) {
+          resolve(value as string);
+        } else {
+          reject(value as Error);
+        }
+      };
+
       const timeout = setTimeout(() => {
         this.stop();
-        reject(new Error('Tunnel creation timed out (30s). Check your internet connection.'));
+        settle(false, new Error('Tunnel creation timed out (30s). Check your internet connection.'));
       }, 30000);
 
       this.process = spawn(cloudflaredPath, [
@@ -43,11 +64,10 @@ export class TunnelManager {
         Logger.info(`[cloudflared] ${text.trim()}`);
 
         const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-        if (match) {
-          clearTimeout(timeout);
+        if (match && !settled) {
           this.tunnelUrl = match[0];
           Logger.info(`Tunnel URL: ${this.tunnelUrl}`);
-          resolve(this.tunnelUrl);
+          settle(true, this.tunnelUrl);
         }
       });
 
@@ -57,16 +77,18 @@ export class TunnelManager {
 
       this.process.on('exit', (code) => {
         if (code !== 0 && code !== null) {
-          clearTimeout(timeout);
           Logger.error(`cloudflared exited with code ${code}`);
-          reject(new Error(`cloudflared exited with code ${code}`));
+          settle(false, new Error(`cloudflared exited with code ${code}`));
+        } else if (!this.tunnelUrl) {
+          // Process exited cleanly but URL was never captured
+          Logger.error('cloudflared exited without providing tunnel URL');
+          settle(false, new Error('cloudflared exited without providing tunnel URL'));
         }
       });
 
       this.process.on('error', (err) => {
-        clearTimeout(timeout);
         Logger.error('cloudflared process error', err);
-        reject(err);
+        settle(false, err);
       });
     });
   }
@@ -92,10 +114,32 @@ export class TunnelManager {
     const binName = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
     const binPath = path.join(this.binDir, binName);
 
+    // 1. Check if binary already exists at expected location
     if (fs.existsSync(binPath)) {
       return binPath;
     }
 
+    // 2. Check for bundled binary (included in extension package)
+    const bundledBinName = BUNDLED_BINARIES[key];
+    if (bundledBinName) {
+      const bundledPath = path.join(this.binDir, bundledBinName);
+      if (fs.existsSync(bundledPath)) {
+        Logger.info(`Using bundled cloudflared for ${key}`);
+
+        // Windows: bundled binary is already named correctly
+        if (platform === 'win32') {
+          return bundledPath;
+        }
+
+        // macOS: copy bundled binary to expected name 'cloudflared'
+        fs.copyFileSync(bundledPath, binPath);
+        fs.chmodSync(binPath, 0o755);
+        Logger.info(`Copied bundled binary to ${binPath}`);
+        return binPath;
+      }
+    }
+
+    // 3. Fallback: download from GitHub
     const downloadUrl = CLOUDFLARED_URLS[key];
     if (!downloadUrl) {
       throw new Error(`Unsupported platform: ${key}. Please install cloudflared manually.`);

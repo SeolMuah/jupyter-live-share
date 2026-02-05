@@ -14,6 +14,40 @@ const Renderer = (() => {
       delete highlightTimers[key];
     }, HIGHLIGHT_DEBOUNCE_MS);
   }
+
+  /**
+   * Copy text to clipboard with fallback
+   */
+  function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      showCopySuccess(btn);
+    }).catch(() => {
+      // Fallback: execCommand
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showCopySuccess(btn);
+      } catch (e) {
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+      }
+      document.body.removeChild(textarea);
+    });
+  }
+
+  function showCopySuccess(btn) {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 2000);
+  }
   /**
    * Render entire notebook
    */
@@ -53,6 +87,10 @@ const Renderer = (() => {
    */
   function renderMarkupCell(cell, container) {
     container.innerHTML = '';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cell-markup-wrapper';
+
     const content = document.createElement('div');
     content.className = 'cell-markup';
 
@@ -79,7 +117,21 @@ const Renderer = (() => {
       console.warn('KaTeX rendering error:', e);
     }
 
-    container.appendChild(content);
+    wrapper.appendChild(content);
+
+    // Copy button for markdown cell (copies raw markdown source)
+    // Store source in data attribute for updates
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.textContent = 'Copy';
+    wrapper.dataset.source = cell.source || '';
+    copyBtn.addEventListener('click', () => {
+      const source = wrapper.dataset.source || '';
+      copyToClipboard(source, copyBtn);
+    });
+    wrapper.appendChild(copyBtn);
+
+    container.appendChild(wrapper);
   }
 
   /**
@@ -107,19 +159,14 @@ const Renderer = (() => {
 
     container.appendChild(sourceEl);
 
-    // Copy button
+    // Copy button (read from code element for live updates)
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(cell.source || '').then(() => {
-        copyBtn.textContent = 'Copied!';
-        copyBtn.classList.add('copied');
-        setTimeout(() => {
-          copyBtn.textContent = 'Copy';
-          copyBtn.classList.remove('copied');
-        }, 2000);
-      });
+      const codeEl = container.querySelector('.cell-source code');
+      const text = codeEl ? codeEl.textContent : '';
+      copyToClipboard(text, copyBtn);
     });
     container.appendChild(copyBtn);
 
@@ -157,9 +204,11 @@ const Renderer = (() => {
 
     if (mime === 'text/html') {
       const div = document.createElement('div');
+      // Sanitize HTML output - allow inline style attribute but NOT <style> tags
+      // <style> tags can be exploited for CSS-based attacks (data exfiltration, UI spoofing)
       div.innerHTML = DOMPurify.sanitize(data, {
-        ADD_TAGS: ['style'],
-        ADD_ATTR: ['class', 'style'],
+        ADD_ATTR: ['class', 'style'], // inline style attribute only
+        FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
       });
       return div;
     }
@@ -239,8 +288,14 @@ const Renderer = (() => {
     }
 
     // Markup cell - Markdown 렌더링은 디바운스
+    const markupWrapper = cellEl.querySelector('.cell-markup-wrapper');
     const markupEl = cellEl.querySelector('.cell-markup');
     if (markupEl) {
+      // Update data-source for copy button
+      if (markupWrapper) {
+        markupWrapper.dataset.source = source || '';
+      }
+
       const key = `markup-${index}`;
       if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
       highlightTimers[key] = setTimeout(() => {
@@ -337,21 +392,25 @@ const Renderer = (() => {
     badge.textContent = getLanguageLabel(data.languageId);
     header.appendChild(badge);
 
-    // Copy 버튼
+    // Copy 버튼 (read from content element for live updates)
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn document-copy-btn';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(data.content || '').then(() => {
-        copyBtn.textContent = 'Copied!';
-        copyBtn.classList.add('copied');
-        setTimeout(() => {
-          copyBtn.textContent = 'Copy';
-          copyBtn.classList.remove('copied');
-        }, 2000);
-      });
+      const contentEl = document.getElementById('document-content');
+      const codeEl = contentEl?.querySelector('code');
+      const markupEl = contentEl?.querySelector('.cell-markup');
+      // For code: get textContent, for markdown: get from data attribute or raw text
+      let text = '';
+      if (codeEl) {
+        text = codeEl.textContent || '';
+      } else if (markupEl) {
+        text = wrapper.dataset.source || markupEl.textContent || '';
+      }
+      copyToClipboard(text, copyBtn);
     });
     header.appendChild(copyBtn);
+    wrapper.dataset.source = data.content || '';
 
     wrapper.appendChild(header);
 
@@ -423,6 +482,12 @@ const Renderer = (() => {
   function updateDocumentContent(content) {
     const contentEl = document.getElementById('document-content');
     if (!contentEl) return;
+
+    // Update data-source for copy button
+    const wrapper = document.querySelector('.plaintext-document');
+    if (wrapper) {
+      wrapper.dataset.source = content || '';
+    }
 
     // languageId를 badge 텍스트에서 유추
     const badge = document.querySelector('.document-type-badge');

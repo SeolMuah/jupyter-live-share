@@ -268,9 +268,26 @@ header {
 }
 
 /* === Markup Cell === */
+.cell-markup-wrapper {
+  position: relative;
+}
+
+.cell-markup-wrapper .copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.cell-markup-wrapper:hover .copy-btn {
+  opacity: 1;
+}
+
 .cell-markup {
   padding: 12px 16px;
   background: var(--bg-cell);
+  overflow-x: auto;
 }
 
 .cell-markup h1, .cell-markup h2, .cell-markup h3 {
@@ -297,10 +314,20 @@ header {
   font-size: 0.875rem;
 }
 
+.cell-markup pre {
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--bg-code);
+  border-radius: 4px;
+  margin: 0.5em 0;
+}
+
 .cell-markup pre code {
   display: block;
   padding: 12px;
-  overflow-x: auto;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-wrap: normal;
 }
 
 /* === Output === */

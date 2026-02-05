@@ -2,7 +2,7 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Share Jupyter Notebooks in real-time with students via browser",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "jupyter-live-share",
   "license": "MIT",
   "repository": {

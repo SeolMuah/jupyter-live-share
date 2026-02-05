@@ -12,9 +12,9 @@ dist/
 # VS Code test
 .vscode-test/
 
-# Cloudflared binaries
-bin/cloudflared*
-bin/*.exe
+# Cloudflared binaries (bundled with extension, do not ignore)
+# bin/cloudflared*
+# bin/*.exe
 
 # OS files
 Thumbs.db

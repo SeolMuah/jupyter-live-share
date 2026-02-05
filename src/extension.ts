@@ -9,6 +9,7 @@ import { forceStopWsServer } from './server/wsServer';
 import { forceStopTunnel } from './ui/commands';
 
 let statusBarManager: StatusBarManager | undefined;
+let sessionViewProvider: SessionViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   Logger.init();
@@ -22,11 +23,16 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusBarManager);
 
   // Sidebar WebviewView
-  const sessionViewProvider = new SessionViewProvider(context.extensionUri);
+  sessionViewProvider = new SessionViewProvider(context.extensionUri);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       SessionViewProvider.viewType,
-      sessionViewProvider
+      sessionViewProvider,
+      {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+      }
     )
   );
 
@@ -80,7 +86,7 @@ export function deactivate() {
 
   // 정상 종료 시도
   try {
-    stopSession(statusBarManager!);
+    stopSession(statusBarManager!, sessionViewProvider);
   } catch {
     // 정상 종료 실패 시 강제 정리
     emergencyCleanup();

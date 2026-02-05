@@ -13,6 +13,7 @@ interface ClientMeta {
   isTeacherPanel: boolean;
   nickname: string | null;
   lastMessageTimes: number[];
+  countedAsViewer: boolean; // Track if this client has been counted in viewerCount
 }
 
 interface PollState {
@@ -21,6 +22,15 @@ interface PollState {
   optionCount: number;
   votes: number[];
   voterChoices: Map<WebSocket, number>;
+}
+
+// Read-only poll state for external consumers (no mutable references)
+export interface PollStateReadonly {
+  pollId: string;
+  question: string;
+  optionCount: number;
+  votes: readonly number[];
+  totalVoters: number;
 }
 
 let wss: WebSocket.Server | null = null;
@@ -49,14 +59,15 @@ export function getViewerCount(): number {
   return viewerCount;
 }
 
-export function getCurrentPollState(): PollState | null {
+export function getCurrentPollState(): PollStateReadonly | null {
   if (!currentPoll) return null;
+  // Return read-only snapshot - no mutable references exposed
   return {
     pollId: currentPoll.pollId,
     question: currentPoll.question,
     optionCount: currentPoll.optionCount,
-    votes: [...currentPoll.votes],
-    voterChoices: currentPoll.voterChoices, // not cloned, used only for read
+    votes: [...currentPoll.votes], // cloned array
+    totalVoters: currentPoll.voterChoices.size, // only the count, not the Map
   };
 }
 
@@ -129,6 +140,7 @@ export function startWsServer(
       isTeacherPanel: false,
       nickname: isTeacher ? 'Teacher' : null,
       lastMessageTimes: [],
+      countedAsViewer: false,
     };
     clientMeta.set(ws, meta);
 
@@ -182,6 +194,7 @@ export function startWsServer(
           }
 
           meta.authenticated = true;
+          meta.countedAsViewer = true;
           viewerCount++;
           Logger.info(`Viewer connected (total: ${viewerCount}, isTeacher: ${isTeacher})`);
 
@@ -285,7 +298,9 @@ export function startWsServer(
     });
 
     ws.on('close', () => {
-      if (meta.authenticated && !meta.isTeacherPanel) {
+      // Only decrement if this client was actually counted as a viewer
+      if (meta.countedAsViewer) {
+        meta.countedAsViewer = false; // Prevent double decrement
         viewerCount = Math.max(0, viewerCount - 1);
         Logger.info(`Viewer disconnected (total: ${viewerCount})`);
         broadcast('viewers:count', { count: viewerCount });

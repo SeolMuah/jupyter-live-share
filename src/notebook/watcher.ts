@@ -190,7 +190,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       sendTo(ws, 'poll:results', {
         pollId: poll.pollId,
         votes: poll.votes,
-        totalVoters: poll.voterChoices.size,
+        totalVoters: poll.totalVoters,
       });
     }
   });
@@ -260,7 +260,7 @@ function startWatchingTextDocument(document: vscode.TextDocument) {
       sendTo(ws, 'poll:results', {
         pollId: poll.pollId,
         votes: poll.votes,
-        totalVoters: poll.voterChoices.size,
+        totalVoters: poll.totalVoters,
       });
     }
   });
@@ -386,21 +386,31 @@ export function getCurrentContent(): { content: string; mode: 'notebook' | 'plai
       cells.push(cellObj);
     }
 
+    // Extract kernel metadata from NotebookDocument (fallback to defaults if not available)
+    const nbMeta = (currentNotebook.metadata as Record<string, any>) || {};
+
+    // VS Code Jupyter extension stores original metadata in various locations
+    const customMeta = nbMeta.custom?.metadata || nbMeta.metadata || {};
+
+    const kernelspec = customMeta.kernelspec || nbMeta.kernelspec || {
+      display_name: 'Python 3',
+      language: 'python',
+      name: 'python3',
+    };
+
+    const language_info = customMeta.language_info || nbMeta.language_info || {
+      name: 'python',
+      version: '3.12.0',
+    };
+
     const ipynb = {
       cells,
       metadata: {
-        kernelspec: {
-          display_name: 'Python 3',
-          language: 'python',
-          name: 'python3',
-        },
-        language_info: {
-          name: 'python',
-          version: '3.12.0',
-        },
+        kernelspec,
+        language_info,
       },
-      nbformat: 4,
-      nbformat_minor: 5,
+      nbformat: customMeta.nbformat || nbMeta.nbformat || 4,
+      nbformat_minor: customMeta.nbformat_minor || nbMeta.nbformat_minor || 5,
     };
 
     return { content: JSON.stringify(ipynb, null, 1), mode: 'notebook' };
