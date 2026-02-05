@@ -38,10 +38,27 @@ export class TunnelManager {
     return new Promise((resolve, reject) => {
       let settled = false; // Prevent double resolve/reject
 
+      // Event handlers (stored for cleanup)
+      let stderrHandler: ((data: Buffer) => void) | null = null;
+      let stdoutHandler: ((data: Buffer) => void) | null = null;
+      let exitHandler: ((code: number | null) => void) | null = null;
+      let errorHandler: ((err: Error) => void) | null = null;
+
+      const cleanup = () => {
+        // Remove event listeners to prevent memory leaks
+        if (this.process) {
+          if (stderrHandler) this.process.stderr?.removeListener('data', stderrHandler);
+          if (stdoutHandler) this.process.stdout?.removeListener('data', stdoutHandler);
+          if (exitHandler) this.process.removeListener('exit', exitHandler);
+          if (errorHandler) this.process.removeListener('error', errorHandler);
+        }
+      };
+
       const settle = (success: boolean, value: string | Error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        cleanup();
         if (success) {
           resolve(value as string);
         } else {
@@ -59,7 +76,7 @@ export class TunnelManager {
         '--no-autoupdate',
       ]);
 
-      this.process.stderr?.on('data', (data: Buffer) => {
+      stderrHandler = (data: Buffer) => {
         const text = data.toString();
         Logger.info(`[cloudflared] ${text.trim()}`);
 
@@ -69,13 +86,15 @@ export class TunnelManager {
           Logger.info(`Tunnel URL: ${this.tunnelUrl}`);
           settle(true, this.tunnelUrl);
         }
-      });
+      };
+      this.process.stderr?.on('data', stderrHandler);
 
-      this.process.stdout?.on('data', (data: Buffer) => {
+      stdoutHandler = (data: Buffer) => {
         Logger.info(`[cloudflared] ${data.toString().trim()}`);
-      });
+      };
+      this.process.stdout?.on('data', stdoutHandler);
 
-      this.process.on('exit', (code) => {
+      exitHandler = (code: number | null) => {
         if (code !== 0 && code !== null) {
           Logger.error(`cloudflared exited with code ${code}`);
           settle(false, new Error(`cloudflared exited with code ${code}`));
@@ -84,12 +103,14 @@ export class TunnelManager {
           Logger.error('cloudflared exited without providing tunnel URL');
           settle(false, new Error('cloudflared exited without providing tunnel URL'));
         }
-      });
+      };
+      this.process.on('exit', exitHandler);
 
-      this.process.on('error', (err) => {
+      errorHandler = (err: Error) => {
         Logger.error('cloudflared process error', err);
         settle(false, err);
-      });
+      };
+      this.process.on('error', errorHandler);
     });
   }
 

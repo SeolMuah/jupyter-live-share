@@ -611,6 +611,95 @@ const Renderer = (() => {
     return map[label] || 'plaintext';
   }
 
+  /**
+   * Show teacher's cursor position in a cell
+   */
+  let cursorElement = null;
+  let cursorTimeout = null;
+  let selectionElement = null;
+
+  function showTeacherCursor(data) {
+    const { cellIndex, line, character, selectionStart, selectionEnd, hasSelection } = data;
+
+    // Find the cell element
+    const container = document.getElementById('notebook-cells');
+    const cellElement = container?.children[cellIndex];
+    if (!cellElement) return;
+
+    // Find the code or markdown source element
+    const sourceEl = cellElement.querySelector('.cell-source pre code') ||
+                     cellElement.querySelector('.cell-markup');
+    if (!sourceEl) return;
+
+    // Remove previous cursor/selection
+    removeCursor();
+
+    // Get the text content and calculate position
+    const sourceText = sourceEl.textContent || '';
+    const lines = sourceText.split('\n');
+
+    if (line >= lines.length) return;
+
+    // Create line highlight (full line background)
+    const lineHighlight = document.createElement('div');
+    lineHighlight.className = 'teacher-line-highlight';
+    lineHighlight.style.top = `${line * 1.5}em`;
+    sourceEl.style.position = 'relative';
+    sourceEl.appendChild(lineHighlight);
+
+    // Create cursor element (blinking vertical bar)
+    cursorElement = document.createElement('div');
+    cursorElement.className = 'teacher-cursor';
+
+    // Calculate character offset
+    const charOffset = Math.min(character, lines[line].length);
+    cursorElement.style.top = `${line * 1.5}em`;
+    cursorElement.style.left = `${charOffset}ch`;
+
+    sourceEl.appendChild(cursorElement);
+
+    // Handle selection highlight
+    if (hasSelection && (selectionStart.line !== selectionEnd.line || selectionStart.character !== selectionEnd.character)) {
+      selectionElement = document.createElement('div');
+      selectionElement.className = 'teacher-selection';
+
+      // Simple single-line selection
+      if (selectionStart.line === selectionEnd.line) {
+        selectionElement.style.top = `${selectionStart.line * 1.5}em`;
+        selectionElement.style.left = `${selectionStart.character}ch`;
+        selectionElement.style.width = `${selectionEnd.character - selectionStart.character}ch`;
+      } else {
+        // Multi-line: highlight from start to end of first line for simplicity
+        selectionElement.style.top = `${selectionStart.line * 1.5}em`;
+        selectionElement.style.left = `${selectionStart.character}ch`;
+        selectionElement.style.width = `${Math.max(10, lines[selectionStart.line].length - selectionStart.character)}ch`;
+        selectionElement.style.height = `${(selectionEnd.line - selectionStart.line + 1) * 1.5}em`;
+      }
+
+      sourceEl.appendChild(selectionElement);
+    }
+
+    // Auto-remove cursor after 3 seconds of inactivity
+    cursorTimeout = setTimeout(() => {
+      removeCursor();
+    }, 3000);
+
+    // Scroll the cell into view if needed
+    cellElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function removeCursor() {
+    if (cursorTimeout) {
+      clearTimeout(cursorTimeout);
+      cursorTimeout = null;
+    }
+
+    // Remove all cursor elements
+    document.querySelectorAll('.teacher-cursor, .teacher-line-highlight, .teacher-selection').forEach(el => el.remove());
+    cursorElement = null;
+    selectionElement = null;
+  }
+
   return {
     renderNotebook,
     renderCell,
@@ -620,5 +709,6 @@ const Renderer = (() => {
     handleStructureChange,
     renderPlaintextDocument,
     updateDocumentContent,
+    showTeacherCursor,
   };
 })();

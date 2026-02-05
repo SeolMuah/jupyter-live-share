@@ -55,14 +55,19 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.startSession', () =>
-      startSession(context, statusBarManager!, sessionViewProvider)
-    )
+    vscode.commands.registerCommand('jupyterLiveShare.startSession', () => {
+      if (!statusBarManager) {
+        vscode.window.showErrorMessage('Extension not properly initialized');
+        return;
+      }
+      startSession(context, statusBarManager, sessionViewProvider);
+    })
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.stopSession', () =>
-      stopSession(statusBarManager!, sessionViewProvider)
-    )
+    vscode.commands.registerCommand('jupyterLiveShare.stopSession', () => {
+      if (!statusBarManager) return;
+      stopSession(statusBarManager, sessionViewProvider);
+    })
   );
 
   // Poll commands
@@ -86,7 +91,9 @@ export function deactivate() {
 
   // 정상 종료 시도
   try {
-    stopSession(statusBarManager!, sessionViewProvider);
+    if (statusBarManager) {
+      stopSession(statusBarManager, sessionViewProvider);
+    }
   } catch {
     // 정상 종료 실패 시 강제 정리
     emergencyCleanup();

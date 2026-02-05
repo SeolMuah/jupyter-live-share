@@ -7,11 +7,13 @@ import WebSocket from 'ws';
 const CELL_DEBOUNCE_MS = 150;
 const TEXT_DEBOUNCE_MS = 100;
 const THROTTLE_MS = 200;
+const CURSOR_THROTTLE_MS = 50; // Cursor updates need faster response
 
 let disposables: vscode.Disposable[] = [];
 let debounceTimers: Map<number, NodeJS.Timeout> = new Map();
 let textDebounceTimer: NodeJS.Timeout | null = null;
 let lastFocusTime = 0;
+let lastCursorTime = 0;
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
@@ -36,7 +38,59 @@ export function getCurrentFileName(): string | null {
   return uri.path.split('/').pop() || null;
 }
 
+/**
+ * Extract cell index from notebook cell URI
+ * Cell URIs have format: vscode-notebook-cell:/path/to/notebook.ipynb#X...
+ * where X is related to the cell
+ */
+function getCellIndexFromUri(cellUri: vscode.Uri, notebook: vscode.NotebookDocument): number {
+  // Find the cell by matching document URI
+  for (let i = 0; i < notebook.cellCount; i++) {
+    const cell = notebook.cellAt(i);
+    if (cell.document.uri.toString() === cellUri.toString()) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Setup new viewer handler once - handles both notebook and plaintext modes
+ * This prevents duplicate handler registration when switching between modes
+ */
+function setupNewViewerHandler() {
+  setOnNewViewer((ws: WebSocket) => {
+    if (watchMode === 'notebook' && currentNotebook) {
+      const editor = vscode.window.activeNotebookEditor;
+      const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
+      const serialized = serializeNotebook(currentNotebook, activeCellIndex);
+      sendTo(ws, 'notebook:full', serialized);
+    } else if (watchMode === 'plaintext' && currentTextDocument) {
+      const serialized = serializeTextDocument(currentTextDocument);
+      sendTo(ws, 'document:full', serialized);
+    }
+
+    // 활성 설문이 있으면 새 접속자에게 전송
+    const poll = getCurrentPollState();
+    if (poll) {
+      sendTo(ws, 'poll:start', {
+        pollId: poll.pollId,
+        question: poll.question,
+        optionCount: poll.optionCount,
+      });
+      sendTo(ws, 'poll:results', {
+        pollId: poll.pollId,
+        votes: poll.votes,
+        totalVoters: poll.totalVoters,
+      });
+    }
+  });
+}
+
 export function startWatching() {
+  // Register new viewer handler once (handles both notebook and plaintext modes)
+  setupNewViewerHandler();
+
   // 현재 활성 노트북 추적
   const activeEditor = vscode.window.activeNotebookEditor;
   if (activeEditor) {
@@ -129,6 +183,44 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
     })
   );
 
+  // 텍스트 에디터 커서 위치 감지 (셀 내부 커서)
+  disposables.push(
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      // 노트북 셀 에디터인 경우에만 처리
+      if (event.textEditor.document.uri.scheme !== 'vscode-notebook-cell') return;
+      if (!currentNotebook) return;
+
+      // throttle: 50ms 간격으로만 전송
+      const now = Date.now();
+      if (now - lastCursorTime < CURSOR_THROTTLE_MS) return;
+      lastCursorTime = now;
+
+      // 셀 인덱스 추출 (URI fragment에서)
+      const cellUri = event.textEditor.document.uri;
+      const cellIndex = getCellIndexFromUri(cellUri, currentNotebook);
+      if (cellIndex === -1) return;
+
+      const selection = event.selections[0];
+      if (!selection) return;
+
+      broadcast('cursor:position', {
+        cellIndex,
+        line: selection.active.line,
+        character: selection.active.character,
+        // 선택 영역도 전송 (드래그 선택 시)
+        selectionStart: {
+          line: selection.start.line,
+          character: selection.start.character,
+        },
+        selectionEnd: {
+          line: selection.end.line,
+          character: selection.end.character,
+        },
+        hasSelection: !selection.isEmpty,
+      });
+    })
+  );
+
   // 활성 노트북 에디터 변경 (다른 파일로 전환)
   disposables.push(
     vscode.window.onDidChangeActiveNotebookEditor((editor) => {
@@ -166,34 +258,6 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       setupTextDocumentWatcher();
     })
   );
-
-  // 새 뷰어 접속 시 현재 상태 전송
-  setOnNewViewer((ws: WebSocket) => {
-    if (watchMode === 'notebook' && currentNotebook) {
-      const editor = vscode.window.activeNotebookEditor;
-      const activeCellIndex = editor?.selections.length ? editor.selections[0].start : 0;
-      const serialized = serializeNotebook(currentNotebook, activeCellIndex);
-      sendTo(ws, 'notebook:full', serialized);
-    } else if (watchMode === 'plaintext' && currentTextDocument) {
-      const serialized = serializeTextDocument(currentTextDocument);
-      sendTo(ws, 'document:full', serialized);
-    }
-
-    // 활성 설문이 있으면 새 접속자에게 전송
-    const poll = getCurrentPollState();
-    if (poll) {
-      sendTo(ws, 'poll:start', {
-        pollId: poll.pollId,
-        question: poll.question,
-        optionCount: poll.optionCount,
-      });
-      sendTo(ws, 'poll:results', {
-        pollId: poll.pollId,
-        votes: poll.votes,
-        totalVoters: poll.totalVoters,
-      });
-    }
-  });
 }
 
 function startWatchingTextDocument(document: vscode.TextDocument) {
@@ -236,34 +300,6 @@ function startWatchingTextDocument(document: vscode.TextDocument) {
       }
     })
   );
-
-  // 새 뷰어 접속 시 현재 상태 전송
-  setOnNewViewer((ws: WebSocket) => {
-    if (watchMode === 'plaintext' && currentTextDocument) {
-      const serialized = serializeTextDocument(currentTextDocument);
-      sendTo(ws, 'document:full', serialized);
-    } else if (watchMode === 'notebook' && currentNotebook) {
-      const editor = vscode.window.activeNotebookEditor;
-      const activeCellIndex = editor?.selections.length ? editor.selections[0].start : 0;
-      const serialized = serializeNotebook(currentNotebook, activeCellIndex);
-      sendTo(ws, 'notebook:full', serialized);
-    }
-
-    // 활성 설문이 있으면 새 접속자에게 전송
-    const poll = getCurrentPollState();
-    if (poll) {
-      sendTo(ws, 'poll:start', {
-        pollId: poll.pollId,
-        question: poll.question,
-        optionCount: poll.optionCount,
-      });
-      sendTo(ws, 'poll:results', {
-        pollId: poll.pollId,
-        votes: poll.votes,
-        totalVoters: poll.totalVoters,
-      });
-    }
-  });
 }
 
 function setupTextDocumentWatcher() {

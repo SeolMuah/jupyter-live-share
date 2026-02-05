@@ -161,11 +161,17 @@ export async function createPoll(sidebarView?: SessionViewProvider) {
     const postData = JSON.stringify({ question, optionCount });
     const url = `http://localhost:${config.port}/api/poll/start`;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: postData,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (response.ok) {
       sidebarView?.updateState({ pollActive: true });
@@ -175,7 +181,11 @@ export async function createPoll(sidebarView?: SessionViewProvider) {
       vscode.window.showErrorMessage(`Failed to start poll: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
-    vscode.window.showErrorMessage(`Failed to start poll: ${err instanceof Error ? err.message : String(err)}`);
+    if (err instanceof Error && err.name === 'AbortError') {
+      vscode.window.showErrorMessage('Failed to start poll: Request timed out');
+    } else {
+      vscode.window.showErrorMessage(`Failed to start poll: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
@@ -185,10 +195,16 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
   try {
     const url = `http://localhost:${config.port}/api/poll/end`;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (response.ok) {
       sidebarView?.updateState({ pollActive: false });
@@ -198,7 +214,11 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
       vscode.window.showErrorMessage(`Failed to end poll: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
-    vscode.window.showErrorMessage(`Failed to end poll: ${err instanceof Error ? err.message : String(err)}`);
+    if (err instanceof Error && err.name === 'AbortError') {
+      vscode.window.showErrorMessage('Failed to end poll: Request timed out');
+    } else {
+      vscode.window.showErrorMessage(`Failed to end poll: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

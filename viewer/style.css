@@ -889,3 +889,89 @@ footer label {
     font-size: 0.85rem;
   }
 }
+
+/* === Teacher Cursor === */
+.teacher-cursor {
+  position: absolute;
+  width: 3px;
+  height: 1.5em;
+  background: #ff4444;
+  border-radius: 1px;
+  animation: cursor-blink 0.8s ease-in-out infinite;
+  z-index: 100;
+  box-shadow: 0 0 8px rgba(255, 68, 68, 0.8), 0 0 16px rgba(255, 68, 68, 0.4);
+  pointer-events: none;
+}
+
+.teacher-cursor::before {
+  content: '▼';
+  position: absolute;
+  top: -18px;
+  left: -6px;
+  font-size: 14px;
+  color: #ff4444;
+  text-shadow: 0 0 4px rgba(255, 68, 68, 0.8);
+}
+
+.teacher-cursor::after {
+  content: '선생님';
+  position: absolute;
+  top: -18px;
+  left: 10px;
+  font-size: 11px;
+  color: #fff;
+  background: #ff4444;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.teacher-line-highlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5em;
+  background: rgba(255, 68, 68, 0.15);
+  border-left: 3px solid #ff4444;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.teacher-selection {
+  position: absolute;
+  height: 1.5em;
+  background: rgba(255, 200, 0, 0.3);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 60;
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .teacher-cursor {
+  background: #ff6b6b;
+  box-shadow: 0 0 10px rgba(255, 107, 107, 0.9), 0 0 20px rgba(255, 107, 107, 0.5);
+}
+
+[data-theme="dark"] .teacher-cursor::before {
+  color: #ff6b6b;
+}
+
+[data-theme="dark"] .teacher-cursor::after {
+  background: #ff6b6b;
+}
+
+[data-theme="dark"] .teacher-line-highlight {
+  background: rgba(255, 107, 107, 0.2);
+  border-left-color: #ff6b6b;
+}
+
+[data-theme="dark"] .teacher-selection {
+  background: rgba(255, 200, 0, 0.25);
+}

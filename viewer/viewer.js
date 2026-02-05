@@ -181,6 +181,12 @@
         }
         break;
 
+      case 'cursor:position':
+        if (documentType === 'notebook') {
+          Renderer.showTeacherCursor(msg.data);
+        }
+        break;
+
       case 'viewers:count':
         viewerCount.textContent = `${msg.data.count}명 접속`;
         break;
