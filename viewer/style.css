@@ -3,8 +3,8 @@
   --bg-primary: #ffffff;
   --bg-secondary: #f6f8fa;
   --bg-cell: #ffffff;
-  --bg-output: #f8f9fa;
-  --bg-code: #f6f8fa;
+  --bg-output: #fffaf5;
+  --bg-code: #f8fafc;
   --bg-active: #fff8e1;
   --text-primary: #24292f;
   --text-secondary: #57606a;
@@ -12,10 +12,13 @@
   --border-color: #d0d7de;
   --border-active: #ffc107;
   --accent: #0969da;
+  --accent-output: #d97706;
   --error-bg: #ffeef0;
   --error-text: #cf222e;
   --header-bg: #24292f;
   --header-text: #ffffff;
+  --code-border: #e2e8f0;
+  --output-border: #fed7aa;
   --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
@@ -25,8 +28,8 @@
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
   --bg-cell: #161b22;
-  --bg-output: #1c2128;
-  --bg-code: #1c2128;
+  --bg-output: #1a1612;
+  --bg-code: #0d1117;
   --bg-active: #2d2000;
   --text-primary: #c9d1d9;
   --text-secondary: #8b949e;
@@ -34,10 +37,13 @@
   --border-color: #30363d;
   --border-active: #d29922;
   --accent: #58a6ff;
+  --accent-output: #f59e0b;
   --error-bg: #3d1214;
   --error-text: #f85149;
   --header-bg: #161b22;
   --header-text: #c9d1d9;
+  --code-border: #21262d;
+  --output-border: #78350f;
 }
 
 /* === Reset === */
@@ -204,18 +210,22 @@ header {
 .cell-code .cell-source {
   display: flex;
   background: var(--bg-code);
+  border-left: 3px solid var(--accent);
+  border-radius: 0;
 }
 
 .exec-label {
   display: flex;
   align-items: flex-start;
-  padding: 8px;
-  min-width: 48px;
+  padding: 8px 4px 8px 8px;
+  min-width: 64px;
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--accent);
   user-select: none;
   flex-shrink: 0;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .cell-source pre {
@@ -332,10 +342,25 @@ header {
 
 /* === Output === */
 .cell-outputs {
-  border-top: 1px solid var(--border-color);
-  padding: 8px 8px 8px 56px;
+  position: relative;
+  border-top: 1px solid var(--output-border);
+  border-left: 3px solid var(--accent-output);
+  padding: 10px 12px 10px 72px;
   background: var(--bg-output);
   overflow-x: auto;
+  margin-top: 0;
+}
+
+/* Output label */
+.cell-outputs::before {
+  content: 'Out:';
+  position: absolute;
+  left: 11px;
+  top: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-output);
 }
 
 .cell-outputs pre {
@@ -352,6 +377,7 @@ header {
   height: auto;
   display: block;
   margin: 4px 0;
+  border-radius: 4px;
 }
 
 /* DataFrame tables */
@@ -974,4 +1000,52 @@ footer label {
 
 [data-theme="dark"] .teacher-selection {
   background: rgba(255, 200, 0, 0.25);
+}
+
+/* === Teacher Viewport Indicator === */
+.cell.teacher-viewport {
+  position: relative;
+}
+
+.cell.teacher-viewport::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, #ff4444 0%, #ff6b6b 50%, #ff4444 100%);
+  border-radius: 2px;
+  animation: viewport-pulse 2s ease-in-out infinite;
+  z-index: 100;
+}
+
+.cell.teacher-viewport-start::after {
+  content: '👀 선생님 화면';
+  position: absolute;
+  left: 12px;
+  top: -12px;
+  font-size: 11px;
+  color: #fff;
+  background: #ff4444;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  z-index: 101;
+  box-shadow: 0 2px 8px rgba(255, 68, 68, 0.4);
+}
+
+@keyframes viewport-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+[data-theme="dark"] .cell.teacher-viewport::before {
+  background: linear-gradient(180deg, #ff6b6b 0%, #ff8787 50%, #ff6b6b 100%);
+}
+
+[data-theme="dark"] .cell.teacher-viewport-start::after {
+  background: #ff6b6b;
 }

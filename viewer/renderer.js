@@ -146,7 +146,7 @@ const Renderer = (() => {
 
     const execLabel = document.createElement('span');
     execLabel.className = 'exec-label';
-    execLabel.textContent = cell.executionOrder ? `[${cell.executionOrder}]` : '[ ]';
+    execLabel.textContent = cell.executionOrder ? `In [${cell.executionOrder}]:` : 'In [ ]:';
     sourceEl.appendChild(execLabel);
 
     const pre = document.createElement('pre');
@@ -327,7 +327,7 @@ const Renderer = (() => {
     // Update execution order
     const execLabel = cellEl.querySelector('.exec-label');
     if (execLabel && executionOrder) {
-      execLabel.textContent = `[${executionOrder}]`;
+      execLabel.textContent = `In [${executionOrder}]:`;
     }
 
     // Remove existing outputs
@@ -343,6 +343,7 @@ const Renderer = (() => {
 
   /**
    * Set the active (focused) cell
+   * Note: Scroll is now handled by viewport:sync for better precision
    */
   function setActiveCell(index) {
     // Remove existing active
@@ -353,13 +354,86 @@ const Renderer = (() => {
     const cellEl = document.getElementById(`cell-${index}`);
     if (cellEl) {
       cellEl.classList.add('active');
+      // Scroll is handled by viewport:sync event for better synchronization
+    }
+  }
 
-      // Auto-scroll if enabled
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked) {
-        cellEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  /**
+   * Scroll to a specific line number in plaintext document
+   * @deprecated Use scrollToRatio instead for better accuracy with rendered content
+   */
+  function scrollToLine(lineNumber) {
+    const contentEl = document.getElementById('document-content');
+    if (!contentEl) return;
+
+    const codeEl = contentEl.querySelector('pre code') || contentEl.querySelector('.cell-markup');
+    if (!codeEl) return;
+
+    // Calculate approximate line height (1.5em = ~24px typically)
+    const lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 24;
+    const scrollTarget = lineNumber * lineHeight;
+
+    // Scroll the main container
+    const container = document.getElementById('notebook-cells');
+    if (container) {
+      container.scrollTo({
+        top: scrollTarget,
+        behavior: 'smooth'
+      });
+    }
+  }
+
+  /**
+   * Scroll to a specific ratio (0-1) of the document
+   * Works better for rendered content like markdown
+   */
+  function scrollToRatio(ratio) {
+    const container = document.getElementById('notebook-cells');
+    if (!container) return;
+
+    // 전체 스크롤 가능한 높이 계산
+    const maxScroll = container.scrollHeight - container.clientHeight;
+    const scrollTarget = maxScroll * ratio;
+
+    container.scrollTo({
+      top: scrollTarget,
+      behavior: 'smooth'
+    });
+  }
+
+  /**
+   * Update teacher viewport indicator (which cells teacher is viewing)
+   */
+  let viewportIndicatorTimeout = null;
+
+  function updateTeacherViewport(firstCell, lastCell) {
+    // Clear previous viewport indicators
+    document.querySelectorAll('.cell.teacher-viewport, .cell.teacher-viewport-start').forEach(el => {
+      el.classList.remove('teacher-viewport', 'teacher-viewport-start');
+    });
+
+    // Clear timeout
+    if (viewportIndicatorTimeout) {
+      clearTimeout(viewportIndicatorTimeout);
+    }
+
+    // Add viewport indicator to cells within teacher's view
+    for (let i = firstCell; i <= lastCell; i++) {
+      const cellEl = document.getElementById(`cell-${i}`);
+      if (cellEl) {
+        cellEl.classList.add('teacher-viewport');
+        if (i === firstCell) {
+          cellEl.classList.add('teacher-viewport-start');
+        }
       }
     }
+
+    // Auto-hide after 5 seconds of inactivity
+    viewportIndicatorTimeout = setTimeout(() => {
+      document.querySelectorAll('.cell.teacher-viewport, .cell.teacher-viewport-start').forEach(el => {
+        el.classList.remove('teacher-viewport', 'teacher-viewport-start');
+      });
+    }, 5000);
   }
 
   /**
@@ -710,5 +784,8 @@ const Renderer = (() => {
     renderPlaintextDocument,
     updateDocumentContent,
     showTeacherCursor,
+    scrollToLine,
+    scrollToRatio,
+    updateTeacherViewport,
   };
 })();
