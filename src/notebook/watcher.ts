@@ -4,10 +4,10 @@ import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocume
 import { Logger } from '../utils/logger';
 import WebSocket from 'ws';
 
-const CELL_DEBOUNCE_MS = 150;
+const CELL_DEBOUNCE_MS = 50; // 빠른 글자 동기화 (150→50)
 const TEXT_DEBOUNCE_MS = 100;
-const THROTTLE_MS = 200;
-const CURSOR_THROTTLE_MS = 50; // Cursor updates need faster response
+const THROTTLE_MS = 100; // 셀 포커스 추적 반응성 개선 (200→100)
+const CURSOR_THROTTLE_MS = 30; // Cursor updates need fastest response (50→30)
 const VIEWPORT_THROTTLE_MS = 100; // Viewport sync needs fast but not excessive updates
 
 let disposables: vscode.Disposable[] = [];
@@ -16,6 +16,8 @@ let textDebounceTimer: NodeJS.Timeout | null = null;
 let lastFocusTime = 0;
 let lastCursorTime = 0;
 let lastViewportTime = 0;
+let lastActiveCellIndex = -1;
+let lastCursorSource = '';
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
@@ -67,23 +69,7 @@ function setupNewViewerHandler() {
       const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
       const serialized = serializeNotebook(currentNotebook, activeCellIndex);
       sendTo(ws, 'notebook:full', serialized);
-
-      // 새 뷰어에게 현재 뷰포트 정보 전송
-      if (editor && editor.visibleRanges.length > 0) {
-        const totalCells = currentNotebook.cellCount;
-        const firstVisibleCell = editor.visibleRanges[0].start;
-        const lastVisibleCell = Math.min(editor.visibleRanges[0].end - 1, totalCells - 1);
-        const scrollRatio = totalCells > 1 ? firstVisibleCell / (totalCells - 1) : 0;
-
-        sendTo(ws, 'viewport:sync', {
-          mode: 'notebook',
-          firstVisibleCell,
-          lastVisibleCell,
-          focusedCell: activeCellIndex,
-          totalCells,
-          scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
-        });
-      }
+      // 노트북 모드: viewport:sync 전송하지 않음 (cursor:position이 스크롤 담당)
     } else if (watchMode === 'plaintext' && currentTextDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
       sendTo(ws, 'document:full', serialized);
@@ -94,14 +80,12 @@ function setupNewViewerHandler() {
         const totalLines = currentTextDocument.lineCount;
         const firstVisibleLine = editor.visibleRanges[0].start.line;
         const lastVisibleLine = editor.visibleRanges[0].end.line;
-        const scrollRatio = totalLines > 1 ? firstVisibleLine / (totalLines - 1) : 0;
 
         sendTo(ws, 'viewport:sync', {
           mode: 'plaintext',
           firstVisibleLine,
           lastVisibleLine,
           totalLines,
-          scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
         });
       }
     }
@@ -203,69 +187,45 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
     })
   );
 
-  // 활성 셀 변경 감지 (선생님 포커스) - viewport:sync와 함께 전송
+  // 활성 셀 변경 감지 (선생님 포커스)
   disposables.push(
     vscode.window.onDidChangeNotebookEditorSelection((event) => {
-      // throttle: 200ms 간격으로만 전송
-      const now = Date.now();
-      if (now - lastFocusTime < THROTTLE_MS) return;
-      lastFocusTime = now;
-
       const selections = event.selections;
-      if (selections.length > 0) {
+      if (selections.length > 0 && currentNotebook) {
         const activeCellIndex = selections[0].start;
-        broadcast('focus:cell', { cellIndex: activeCellIndex });
 
-        // 뷰포트 정보도 함께 전송
-        const editor = vscode.window.activeNotebookEditor;
-        if (editor && editor.visibleRanges.length > 0) {
-          const firstVisibleCell = editor.visibleRanges[0].start;
-          const lastVisibleCell = editor.visibleRanges[0].end - 1;
-          broadcast('viewport:sync', {
-            mode: 'notebook',
-            firstVisibleCell,
-            lastVisibleCell,
-            focusedCell: activeCellIndex,
-          });
+        // 셀 전환 시: 이전 셀의 pending cell:update를 즉시 flush (마지막 글자 누락 방지)
+        if (activeCellIndex !== lastActiveCellIndex) {
+          for (const [idx, timer] of debounceTimers.entries()) {
+            if (idx !== activeCellIndex) {
+              clearTimeout(timer);
+              // Bounds check: 셀이 삭제된 경우 cellAt() 예외 방지
+              if (idx >= 0 && idx < currentNotebook.cellCount) {
+                const pendingCell = currentNotebook.cellAt(idx);
+                broadcast('cell:update', { index: idx, source: pendingCell.document.getText() });
+              }
+              debounceTimers.delete(idx);
+            }
+          }
+          lastActiveCellIndex = activeCellIndex;
         }
+
+        // throttle for focus:cell broadcast
+        const now = Date.now();
+        if (now - lastFocusTime < THROTTLE_MS) return;
+        lastFocusTime = now;
+
+        // 셀 타입 정보 추가 (마크다운 셀 동기화 개선용)
+        const cell = currentNotebook.cellAt(activeCellIndex);
+        const cellKind = cell.kind === vscode.NotebookCellKind.Markup ? 'markup' : 'code';
+
+        broadcast('focus:cell', { cellIndex: activeCellIndex, cellKind });
       }
     })
   );
 
-  // 노트북 뷰포트(스크롤) 변경 감지 - 선생님이 보는 화면 영역 추적
-  disposables.push(
-    vscode.window.onDidChangeNotebookEditorVisibleRanges((event) => {
-      if (!currentNotebook) return;
-      if (event.notebookEditor.notebook.uri.toString() !== currentNotebook.uri.toString()) return;
-
-      // throttle
-      const now = Date.now();
-      if (now - lastViewportTime < VIEWPORT_THROTTLE_MS) return;
-      lastViewportTime = now;
-
-      if (event.visibleRanges.length > 0) {
-        const totalCells = currentNotebook.cellCount;
-        const firstVisibleCell = event.visibleRanges[0].start;
-        const lastVisibleCell = Math.min(event.visibleRanges[0].end - 1, totalCells - 1);
-
-        // 스크롤 비율 계산 (0 ~ 1)
-        const scrollRatio = totalCells > 1 ? firstVisibleCell / (totalCells - 1) : 0;
-
-        // 현재 포커스된 셀 정보도 함께 전송
-        const editor = vscode.window.activeNotebookEditor;
-        const focusedCell = editor?.selections?.length ? editor.selections[0].start : firstVisibleCell;
-
-        broadcast('viewport:sync', {
-          mode: 'notebook',
-          firstVisibleCell,
-          lastVisibleCell,
-          focusedCell,
-          totalCells,
-          scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
-        });
-      }
-    })
-  );
+  // 노트북 모드: viewport:sync 제거 — cursor:position이 학생 뷰 스크롤을 전담
+  // 선생님 스크롤이 학생 화면에 영향을 주지 않음
 
   // 텍스트 에디터 커서 위치 감지 (셀 내부 커서)
   disposables.push(
@@ -287,10 +247,22 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       const selection = event.selections[0];
       if (!selection) return;
 
+      // 셀 내 총 라인 수와 현재 라인 비율 계산
+      const totalLines = event.textEditor.document.lineCount;
+      const currentLine = selection.active.line;
+      const lineRatio = totalLines > 1 ? currentLine / (totalLines - 1) : 0;
+
+      // 소스가 변경된 경우에만 포함 (마지막 글자 동기화 보장)
+      const cellSource = event.textEditor.document.getText();
+      const sourceChanged = cellSource !== lastCursorSource;
+      if (sourceChanged) lastCursorSource = cellSource;
+
       broadcast('cursor:position', {
         cellIndex,
-        line: selection.active.line,
+        line: currentLine,
         character: selection.active.character,
+        totalLines,
+        lineRatio: Math.min(1, Math.max(0, lineRatio)),
         // 선택 영역도 전송 (드래그 선택 시)
         selectionStart: {
           line: selection.start.line,
@@ -301,6 +273,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           character: selection.end.character,
         },
         hasSelection: !selection.isEmpty,
+        ...(sourceChanged ? { source: cellSource } : {}),
       });
     })
   );
@@ -428,15 +401,12 @@ function setupTextDocumentWatcher() {
       const firstVisibleLine = event.visibleRanges[0].start.line;
       const lastVisibleLine = event.visibleRanges[0].end.line;
 
-      // 스크롤 비율 계산 (0 ~ 1)
-      const scrollRatio = totalLines > 1 ? firstVisibleLine / (totalLines - 1) : 0;
-
+      // scrollRatio 대신 라인 인덱스 기반 동기화 (더 정확함)
       broadcast('viewport:sync', {
         mode: 'plaintext',
         firstVisibleLine,
         lastVisibleLine,
         totalLines,
-        scrollRatio: Math.min(1, Math.max(0, scrollRatio)),
       });
     }
   });
@@ -595,5 +565,7 @@ export function stopWatching() {
   currentNotebook = null;
   currentTextDocument = null;
   watchMode = null;
+  lastActiveCellIndex = -1;
+  lastCursorSource = '';
   Logger.info('Stopped watching');
 }

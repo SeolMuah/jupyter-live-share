@@ -21,6 +21,7 @@
   --output-border: #fed7aa;
   --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --footer-height: 50px; /* fixed footer 높이 */
 }
 
 /* === Dark Mode === */
@@ -188,7 +189,14 @@ header {
   max-width: 960px;
   margin: 0 auto;
   padding: 16px;
-  padding-bottom: 60px;
+  padding-bottom: 16px;
+}
+
+/* Fixed footer를 위한 하단 여백 - ::after로 확실하게 공간 확보 */
+#notebook-cells::after {
+  content: '';
+  display: block;
+  height: calc(var(--footer-height) + 40px); /* footer 높이 + 여유 공간 */
 }
 
 /* === Cell === */
@@ -246,6 +254,162 @@ header {
 /* hljs 테마 배경색 제거 (셀 배경 사용) */
 .cell-source code.hljs {
   background: transparent !important;
+}
+
+/* === Highlight.js Fallback Styles (VS Code Webview CDN 대체) === */
+/* Light Mode - VS Theme */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-tag {
+  color: #0000ff;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-symbol,
+.hljs-bullet {
+  color: #a31515;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #098658;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #008000;
+  font-style: italic;
+}
+
+.hljs-function .hljs-title,
+.hljs-title.function_,
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: #795e26;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #001080;
+}
+
+.hljs-built_in,
+.hljs-type {
+  color: #267f99;
+}
+
+.hljs-params {
+  color: #001080;
+}
+
+.hljs-meta {
+  color: #000080;
+}
+
+.hljs-name,
+.hljs-attribute {
+  color: #e50000;
+}
+
+.hljs-section,
+.hljs-title {
+  color: #800000;
+  font-weight: bold;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+.hljs-link {
+  color: #0000ff;
+  text-decoration: underline;
+}
+
+.hljs-deletion {
+  color: #a31515;
+  background: #ffeef0;
+}
+
+.hljs-addition {
+  color: #098658;
+  background: #e6ffec;
+}
+
+/* Dark Mode - VS2015 Theme */
+[data-theme="dark"] .hljs-keyword,
+[data-theme="dark"] .hljs-selector-tag,
+[data-theme="dark"] .hljs-tag {
+  color: #569cd6;
+}
+
+[data-theme="dark"] .hljs-string,
+[data-theme="dark"] .hljs-attr,
+[data-theme="dark"] .hljs-symbol,
+[data-theme="dark"] .hljs-bullet {
+  color: #ce9178;
+}
+
+[data-theme="dark"] .hljs-number,
+[data-theme="dark"] .hljs-literal {
+  color: #b5cea8;
+}
+
+[data-theme="dark"] .hljs-comment,
+[data-theme="dark"] .hljs-quote {
+  color: #6a9955;
+  font-style: italic;
+}
+
+[data-theme="dark"] .hljs-function .hljs-title,
+[data-theme="dark"] .hljs-title.function_,
+[data-theme="dark"] .hljs-title.class_,
+[data-theme="dark"] .hljs-class .hljs-title {
+  color: #dcdcaa;
+}
+
+[data-theme="dark"] .hljs-variable,
+[data-theme="dark"] .hljs-template-variable {
+  color: #9cdcfe;
+}
+
+[data-theme="dark"] .hljs-built_in,
+[data-theme="dark"] .hljs-type {
+  color: #4ec9b0;
+}
+
+[data-theme="dark"] .hljs-params {
+  color: #9cdcfe;
+}
+
+[data-theme="dark"] .hljs-meta {
+  color: #c586c0;
+}
+
+[data-theme="dark"] .hljs-name,
+[data-theme="dark"] .hljs-attribute {
+  color: #9cdcfe;
+}
+
+[data-theme="dark"] .hljs-section,
+[data-theme="dark"] .hljs-title {
+  color: #dcdcaa;
+  font-weight: bold;
+}
+
+[data-theme="dark"] .hljs-deletion {
+  color: #ce9178;
+  background: #3d1214;
+}
+
+[data-theme="dark"] .hljs-addition {
+  color: #b5cea8;
+  background: #1e3a1e;
 }
 
 /* Copy button */
@@ -340,27 +504,88 @@ header {
   overflow-wrap: normal;
 }
 
+/* Markdown Tables */
+.cell-markup table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 0.9rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.cell-markup thead {
+  background: var(--bg-secondary);
+}
+
+.cell-markup th,
+.cell-markup td {
+  border: 1px solid var(--border-color);
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.cell-markup th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.cell-markup tr:nth-child(even) {
+  background: var(--bg-code);
+}
+
+.cell-markup tr:hover {
+  background: var(--bg-active);
+}
+
+/* Dark mode table adjustments */
+[data-theme="dark"] .cell-markup th {
+  background: #21262d;
+}
+
+[data-theme="dark"] .cell-markup tr:nth-child(even) {
+  background: #161b22;
+}
+
+[data-theme="dark"] .cell-markup tr:hover {
+  background: #1c2128;
+}
+
+/* Responsive table scroll */
+@media (max-width: 768px) {
+  .cell-markup table {
+    font-size: 0.8rem;
+  }
+
+  .cell-markup th,
+  .cell-markup td {
+    padding: 6px 8px;
+  }
+}
+
 /* === Output === */
 .cell-outputs {
   position: relative;
   border-top: 1px solid var(--output-border);
   border-left: 3px solid var(--accent-output);
-  padding: 10px 12px 10px 72px;
+  padding: 10px 12px 10px 12px;
   background: var(--bg-output);
   overflow-x: auto;
   margin-top: 0;
 }
 
-/* Output label */
+/* Output label - 상단에 배치하여 겹침 방지 */
 .cell-outputs::before {
   content: 'Out:';
-  position: absolute;
-  left: 11px;
-  top: 10px;
+  display: block;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--accent-output);
+  margin-bottom: 6px;
 }
 
 .cell-outputs pre {
@@ -893,7 +1118,7 @@ footer label {
   }
 
   .cell-outputs {
-    padding-left: 8px;
+    padding: 8px;
   }
 
   .cell-source code {
@@ -920,12 +1145,12 @@ footer label {
 .teacher-cursor {
   position: absolute;
   width: 3px;
-  height: 1.5em;
-  background: #ff4444;
+  /* height는 JS에서 동적으로 설정 */
+  background: #2563eb;
   border-radius: 1px;
   animation: cursor-blink 0.8s ease-in-out infinite;
   z-index: 100;
-  box-shadow: 0 0 8px rgba(255, 68, 68, 0.8), 0 0 16px rgba(255, 68, 68, 0.4);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.8), 0 0 16px rgba(37, 99, 235, 0.4);
   pointer-events: none;
 }
 
@@ -933,10 +1158,11 @@ footer label {
   content: '▼';
   position: absolute;
   top: -18px;
-  left: -6px;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 14px;
-  color: #ff4444;
-  text-shadow: 0 0 4px rgba(255, 68, 68, 0.8);
+  color: #2563eb;
+  text-shadow: 0 0 4px rgba(37, 99, 235, 0.8);
 }
 
 .teacher-cursor::after {
@@ -946,7 +1172,7 @@ footer label {
   left: 10px;
   font-size: 11px;
   color: #fff;
-  background: #ff4444;
+  background: #2563eb;
   padding: 1px 6px;
   border-radius: 3px;
   white-space: nowrap;
@@ -963,17 +1189,17 @@ footer label {
   position: absolute;
   left: 0;
   right: 0;
-  height: 1.5em;
-  background: rgba(255, 68, 68, 0.15);
-  border-left: 3px solid #ff4444;
+  /* height는 JS에서 동적으로 설정 */
+  background: rgba(37, 99, 235, 0.12);
+  border-left: 3px solid #2563eb;
   pointer-events: none;
   z-index: 50;
 }
 
 .teacher-selection {
   position: absolute;
-  height: 1.5em;
-  background: rgba(255, 200, 0, 0.3);
+  /* height는 JS에서 동적으로 설정 */
+  background: rgba(255, 213, 0, 0.35);
   border-radius: 2px;
   pointer-events: none;
   z-index: 60;
@@ -981,60 +1207,68 @@ footer label {
 
 /* Dark mode adjustments */
 [data-theme="dark"] .teacher-cursor {
-  background: #ff6b6b;
-  box-shadow: 0 0 10px rgba(255, 107, 107, 0.9), 0 0 20px rgba(255, 107, 107, 0.5);
+  background: #60a5fa;
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.9), 0 0 20px rgba(96, 165, 250, 0.5);
 }
 
 [data-theme="dark"] .teacher-cursor::before {
-  color: #ff6b6b;
+  color: #60a5fa;
 }
 
 [data-theme="dark"] .teacher-cursor::after {
-  background: #ff6b6b;
+  background: #60a5fa;
 }
 
 [data-theme="dark"] .teacher-line-highlight {
-  background: rgba(255, 107, 107, 0.2);
-  border-left-color: #ff6b6b;
+  background: rgba(96, 165, 250, 0.15);
+  border-left-color: #60a5fa;
 }
 
 [data-theme="dark"] .teacher-selection {
-  background: rgba(255, 200, 0, 0.25);
+  background: rgba(255, 213, 0, 0.3);
 }
 
-/* === Teacher Viewport Indicator === */
-.cell.teacher-viewport {
+/* 마크다운 셀 편집 중 하이라이트 (정확한 커서 위치 대신 셀 전체 강조) */
+.cell.teacher-editing {
+  background: rgba(37, 99, 235, 0.08);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.4);
+  animation: editing-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes editing-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.4); }
+  50% { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.7); }
+}
+
+[data-theme="dark"] .cell.teacher-editing {
+  background: rgba(96, 165, 250, 0.1);
+  box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.4);
+}
+
+/* 마크다운 셀 raw source 모드 (선생님 커서 표시 시) */
+.cell-markup.raw-source-mode {
+  display: none;
+}
+
+.markup-raw-source {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--bg-code);
+  overflow-x: auto;
+  border-left: 3px solid #2563eb;
+}
+
+.markup-raw-source code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  background: transparent !important;
+  padding: 0 !important;
   position: relative;
-  box-shadow: inset 4px 0 0 0 #ff4444;
 }
 
-.cell.teacher-viewport-start::before {
-  content: '👀 선생님 화면';
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  font-size: 10px;
-  color: #fff;
-  background: #ff4444;
-  padding: 3px 8px;
-  border-radius: 12px;
-  white-space: nowrap;
-  font-family: var(--font-sans);
-  font-weight: 500;
-  z-index: 50;
-  box-shadow: 0 2px 6px rgba(255, 68, 68, 0.3);
-  animation: viewport-label-pulse 2s ease-in-out infinite;
+[data-theme="dark"] .markup-raw-source {
+  border-left-color: #60a5fa;
 }
 
-@keyframes viewport-label-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-[data-theme="dark"] .cell.teacher-viewport {
-  box-shadow: inset 4px 0 0 0 #ff6b6b;
-}
-
-[data-theme="dark"] .cell.teacher-viewport-start::before {
-  background: #ff6b6b;
-}
+/* Teacher viewport indicator 제거 — 스크롤 동기화는 cursor:position이 전담 */
