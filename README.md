@@ -294,7 +294,7 @@ vsce package       # VSIX 패키징
 ## 관련 문서
 
 - [docs/PUBLISHING.md](docs/PUBLISHING.md) - Extension 배포 방법 (VSIX 직접 배포, Open VSX, GitHub Releases)
-- [docs/prd_jupyter_live_share.md](docs/prd_jupyter_live_share.md) - 제품 요구사항 문서 (PRD)
+- [docs/PRD.md](docs/PRD.md) - 제품 요구사항 문서 (PRD)
 - [docs/vscode-badge-workaround.md](docs/vscode-badge-workaround.md) - VS Code WebviewView.badge 초기화 버그 워크어라운드
 
 ## 변경 이력
