@@ -2,6 +2,8 @@
 
 선생님이 VS Code에서 열고 있는 파일을 학생들에게 브라우저로 실시간 공유하는 교육용 VS Code Extension입니다.
 
+> **설치 및 사용법 가이드:** [Notion 문서 바로가기](https://www.notion.so/Jupyter-Live-Share-2fdfceb573c381e78170c6808dad708a)
+
 ## 주요 기능
 
 - **Jupyter Notebook 실시간 공유** (`.ipynb`): 셀 편집, 실행 결과, 셀 추가/삭제가 실시간 반영
