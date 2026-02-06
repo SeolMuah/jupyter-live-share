@@ -144,51 +144,68 @@ git push origin main --tags
 ```
 
 #### GitHub Release 생성 (curl + API)
-`gh` CLI가 없으므로 git credential에 저장된 토큰으로 GitHub API를 직접 호출한다.
-토큰은 `token.txt` 2번째 줄 (GitHub PAT) 또는 `git credential fill`로 가져온다.
+
+`gh` CLI가 없으므로 `token.txt`의 GitHub PAT로 GitHub API를 직접 호출한다.
+
+**중요 규칙:**
+- **토큰**: 반드시 `sed -n '2p' token.txt`로 가져온다. `git credential fill`은 파이프 환경에서 빈 값을 반환할 수 있어 사용 금지.
+- **인증 헤더**: `Authorization: token $TOKEN` (Bearer가 아님)
+- **curl 필수 옵션**: 항상 `-s` (silent) 포함. progress 출력이 응답 파싱을 방해함.
+- **응답 파싱**: curl 출력을 파이프(`|`)로 바로 python에 넘기지 말고, 반드시 **파일로 저장 후 별도로 파싱**한다. 대용량 업로드 시 curl이 빈 stdout을 반환할 수 있음.
+- **파일 경로**: Windows이므로 `$TEMP` 환경변수 사용 (`/tmp` 사용 금지).
+- **대용량 업로드**: VSIX가 ~57MB이므로 `--max-time 300` 필수.
 
 ```bash
-# 1. 토큰 가져오기
-TOKEN=$(printf 'protocol=https\nhost=github.com\n' | git credential fill 2>/dev/null | grep password | cut -d= -f2)
+# ★ 토큰 가져오기 (모든 API 호출 전에 실행)
+TOKEN=$(sed -n '2p' token.txt)
 
-# 2. 릴리스 생성
+# ★ 릴리스 생성 → 파일로 저장 → ID 추출
 curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   "https://api.github.com/repos/SeolMuah/jupyter-live-share/releases" \
   -d '{
     "tag_name": "vX.X.X",
     "target_commitish": "main",
     "name": "vX.X.X",
-    "body": "## Changes\n\n- 변경사항 목록",
+    "body": "## 변경사항\n\n- 내용",
     "draft": false,
     "prerelease": false
-  }'
+  }' > "$TEMP/release.json"
 
-# 3. VSIX 파일 업로드 (릴리스 ID 필요)
-#    릴리스 생성 응답에서 "id" 값을 사용
-curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+# ID 추출
+python -c "import json,os; d=json.load(open(os.environ['TEMP']+'/release.json')); print('ID:', d['id']); print('URL:', d['html_url'])"
+
+# ★ VSIX 파일 업로드 (RELEASE_ID를 위에서 추출한 값으로 교체)
+curl -s --max-time 300 -X POST \
+  -H "Authorization: token $TOKEN" \
   -H "Content-Type: application/octet-stream" \
   "https://uploads.github.com/repos/SeolMuah/jupyter-live-share/releases/{RELEASE_ID}/assets?name=jupyter-live-share-X.X.X.vsix" \
-  --data-binary "@jupyter-live-share-X.X.X.vsix"
+  --data-binary "@jupyter-live-share-X.X.X.vsix" > "$TEMP/upload.json"
 
-# 4. 릴리스 본문 수정 (필요 시)
+# 업로드 결과 확인
+python -c "import json,os; d=json.load(open(os.environ['TEMP']+'/upload.json')); print('Name:', d.get('name'), 'State:', d.get('state'), 'Size:', d.get('size'))"
+
+# ★ 기존 asset 교체 시: 먼저 기존 asset 삭제 후 재업로드
+# asset ID 조회
+curl -s -H "Authorization: token $TOKEN" \
+  "https://api.github.com/repos/SeolMuah/jupyter-live-share/releases/{RELEASE_ID}/assets" > "$TEMP/assets.json"
+python -c "import json,os; [print(f'ID:{a[\"id\"]} Name:{a[\"name\"]} State:{a[\"state\"]}') for a in json.load(open(os.environ['TEMP']+'/assets.json'))]"
+
+# asset 삭제
+curl -s -X DELETE -H "Authorization: token $TOKEN" \
+  "https://api.github.com/repos/SeolMuah/jupyter-live-share/releases/assets/{ASSET_ID}"
+
+# ★ 릴리스 본문 수정
 curl -s -X PATCH \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: token $TOKEN" \
   "https://api.github.com/repos/SeolMuah/jupyter-live-share/releases/{RELEASE_ID}" \
   -d '{"body": "수정된 내용"}'
 ```
 
-#### 릴리스 목록 확인
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://api.github.com/repos/SeolMuah/jupyter-live-share/releases"
-```
-
 #### 토큰 파일 (`token.txt`, gitignore 대상)
 - 1번째 줄: Open VSX 토큰
-- 2번째 줄: GitHub Personal Access Token
+- 2번째 줄: GitHub Personal Access Token (repo scope 필요)
 
 ### 주의사항
 

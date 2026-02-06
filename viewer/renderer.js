@@ -174,6 +174,7 @@ const Renderer = (() => {
     selectionElement = null;
     currentCursorCellIndex = -1;
     documentCursorActive = false;
+    mdDocViewMode = 'rendered';
     // Clear stale highlight timers (DOM elements are about to be destroyed)
     for (const key of Object.keys(highlightTimers)) {
       clearTimeout(highlightTimers[key]);
@@ -809,13 +810,21 @@ const Renderer = (() => {
     const languageId = getLangIdFromLabel(label);
 
     if (languageId === 'markdown') {
-      // Markdown: 전체 렌더링 디바운스
-      const key = 'doc-markdown';
-      if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
-      highlightTimers[key] = setTimeout(() => {
-        renderDocumentContent(content, languageId, contentEl);
-        delete highlightTimers[key];
-      }, HIGHLIGHT_DEBOUNCE_MS);
+      if (mdDocViewMode === 'raw') {
+        // Raw mode: 코드 요소 직접 업데이트 (코드 파일과 동일)
+        const codeEl = contentEl.querySelector('code');
+        if (codeEl) {
+          highlightedUpdate(codeEl, content || '', 'markdown');
+        }
+      } else {
+        // Rendered mode: 전체 렌더링 디바운스
+        const key = 'doc-markdown';
+        if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
+        highlightTimers[key] = setTimeout(() => {
+          renderDocumentContent(content, languageId, contentEl);
+          delete highlightTimers[key];
+        }, HIGHLIGHT_DEBOUNCE_MS);
+      }
     } else {
       // 코드/텍스트: atomic highlight update (flicker 방지)
       const codeEl = contentEl.querySelector('code');
@@ -950,6 +959,7 @@ const Renderer = (() => {
   let selectionElement = null;
   let currentCursorCellIndex = -1;
   let documentCursorActive = false;
+  let mdDocViewMode = 'rendered'; // 'raw' | 'rendered' for markdown document view
   let measureCanvas = null;
 
   function showTeacherCursor(data) {
@@ -1268,9 +1278,69 @@ const Renderer = (() => {
   // === Plaintext Document Cursor ===
 
   /**
+   * Markdown document: switch from rendered view to raw source view
+   * 선생님과 동일하게 순수 마크다운 텍스트를 보여줌
+   */
+  function switchDocToRawMode(content, contentEl) {
+    // 보류 중인 마크다운 렌더 타이머 정리 (raw 모드 덮어쓰기 방지)
+    const key = 'doc-markdown';
+    if (highlightTimers[key]) {
+      clearTimeout(highlightTimers[key]);
+      delete highlightTimers[key];
+    }
+
+    contentEl.innerHTML = '';
+
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-markdown';
+    highlightedUpdate(code, content || '', 'markdown');
+    pre.appendChild(code);
+    contentEl.appendChild(pre);
+
+    mdDocViewMode = 'raw';
+  }
+
+  /**
+   * Markdown document: switch from raw source view back to rendered view
+   * 커서가 사라지면 렌더된 마크다운으로 전환 (스크롤 위치 보존)
+   */
+  function switchDocToRenderedMode() {
+    const contentEl = document.getElementById('document-content');
+    if (!contentEl) return;
+    const wrapper = document.querySelector('.plaintext-document');
+    const content = wrapper?.dataset?.source || '';
+
+    // 스크롤 위치 보존
+    const docHeight = document.documentElement.scrollHeight;
+    const winHeight = window.innerHeight;
+    const maxScroll = docHeight - winHeight;
+    const scrollRatio = maxScroll > 0 ? window.scrollY / maxScroll : 0;
+
+    // 보류 중인 렌더 타이머 정리
+    const key = 'doc-markdown';
+    if (highlightTimers[key]) {
+      clearTimeout(highlightTimers[key]);
+      delete highlightTimers[key];
+    }
+
+    renderDocumentContent(content, 'markdown', contentEl);
+    mdDocViewMode = 'rendered';
+
+    // 스크롤 위치 복원
+    requestAnimationFrame(() => {
+      const newDocHeight = document.documentElement.scrollHeight;
+      const newMaxScroll = newDocHeight - winHeight;
+      if (newMaxScroll > 0) {
+        window.scrollTo({ top: newMaxScroll * scrollRatio, behavior: 'auto' });
+      }
+    });
+  }
+
+  /**
    * Show teacher cursor in plaintext document (.py, .txt, .md 등)
+   * 마크다운: 렌더 모드 → raw 소스 전환 후 커서 표시
    * 코드/텍스트: 정밀 커서 + 라인 하이라이트 + 선택 영역
-   * 마크다운: 렌더된 출력 기준 스크롤만 (커서 오버레이 없음)
    */
   function showDocumentCursor(data) {
     const { line, character, selectionStart, selectionEnd, hasSelection } = data;
@@ -1282,29 +1352,22 @@ const Renderer = (() => {
     if (cursorTimeout) clearTimeout(cursorTimeout);
     cursorTimeout = setTimeout(() => removeDocumentCursor(), 2000);
 
-    // Markdown rendered mode — 렌더된 HTML과 소스 라인이 1:1 매핑이 안 되므로
-    // 커서 오버레이 대신 가장 가까운 data-line 요소로 스크롤만 수행
-    const markupEl = contentEl.querySelector('.cell-markup');
-    if (markupEl) {
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked) {
-        scrollToLine(line);
-      }
-      return;
+    // Markdown 렌더 모드면 raw 소스 모드로 전환 (선생님과 동일한 뷰)
+    if (mdDocViewMode === 'rendered' && contentEl.querySelector('.cell-markup')) {
+      const wrapper = document.querySelector('.plaintext-document');
+      const content = wrapper?.dataset?.source || '';
+      switchDocToRawMode(content, contentEl);
     }
 
-    // 코드/텍스트 mode — 정밀 커서 표시
+    // 코드/텍스트/raw-markdown — 정밀 커서 표시
     const codeEl = contentEl.querySelector('code');
     if (!codeEl) return;
 
-    // 이전 오버레이 제거
     removeCursorOverlays();
     documentCursorActive = true;
 
-    // 커서 + 라인 하이라이트 + 선택 영역 표시
     showCursorInElement(codeEl, line, character, selectionStart, selectionEnd, hasSelection);
 
-    // Auto-scroll
     const autoScroll = document.getElementById('auto-scroll');
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
@@ -1318,6 +1381,11 @@ const Renderer = (() => {
     }
     removeCursorOverlays();
     documentCursorActive = false;
+
+    // Markdown raw mode → 렌더 모드로 전환
+    if (mdDocViewMode === 'raw') {
+      switchDocToRenderedMode();
+    }
   }
 
   return {

@@ -512,13 +512,9 @@
 
   function handlePollStart(data) {
     currentPollId = data.pollId;
-    hasVoted = false;
 
     // Check localStorage for previous vote on this poll
     const savedVote = localStorage.getItem('jls-poll-' + data.pollId);
-    if (savedVote !== null) {
-      hasVoted = true;
-    }
 
     // VS Code mode: poll handled by separate Viewer Chat panel, only track state
     if (isVSCodeWebview) return;
@@ -545,14 +541,10 @@
       const btn = document.createElement('button');
       btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
       btn.dataset.option = i;
-      if (hasVoted) {
-        btn.disabled = true;
-        if (savedVote !== null && parseInt(savedVote) === i) {
-          btn.classList.add('voted');
-        }
-      } else {
-        btn.addEventListener('click', () => votePoll(data.pollId, i));
+      if (savedVote !== null && parseInt(savedVote) === i) {
+        btn.classList.add('voted');
       }
+      btn.addEventListener('click', () => votePoll(data.pollId, i));
       buttonsEl.appendChild(btn);
     }
     card.appendChild(buttonsEl);
@@ -580,19 +572,25 @@
   }
 
   function votePoll(pollId, option) {
-    if (hasVoted || pollId !== currentPollId) return;
+    if (pollId !== currentPollId) return;
 
-    hasVoted = true;
+    // 같은 선택지 재클릭 무시
+    const savedVote = localStorage.getItem('jls-poll-' + pollId);
+    if (savedVote !== null && parseInt(savedVote) === option) return;
+
     localStorage.setItem('jls-poll-' + pollId, option.toString());
     WsClient.send('poll:vote', { pollId, option });
 
-    // Disable all buttons and highlight voted one in the poll card
+    // 현재 선택만 하이라이트 (버튼은 계속 활성 상태)
     const card = document.getElementById('poll-card-' + pollId);
     if (card) {
       const buttons = card.querySelectorAll('.chat-poll-buttons button');
       buttons.forEach((btn, i) => {
-        btn.disabled = true;
-        if (i === option) btn.classList.add('voted');
+        if (i === option) {
+          btn.classList.add('voted');
+        } else {
+          btn.classList.remove('voted');
+        }
       });
     }
   }

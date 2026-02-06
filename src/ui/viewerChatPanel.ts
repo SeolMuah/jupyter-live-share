@@ -591,11 +591,9 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
           const btn = document.createElement('button');
           btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
           btn.dataset.option = i;
-          if (hasVoted) {
-            btn.disabled = true;
-            if (parseInt(savedVote) === i) btn.classList.add('voted');
-          } else {
-            btn.addEventListener('click', () => votePoll(data.pollId, i));
+          btn.addEventListener('click', () => votePoll(data.pollId, i));
+          if (hasVoted && parseInt(savedVote) === i) {
+            btn.classList.add('voted');
           }
           buttonsEl.appendChild(btn);
         }
@@ -617,16 +615,18 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
 
       function votePoll(pollId, option) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (pollId !== currentPollId) return;
+        const savedVote = localStorage.getItem('jls-poll-' + pollId);
+        if (savedVote !== null && parseInt(savedVote) === option) return;
         localStorage.setItem('jls-poll-' + pollId, option.toString());
         ws.send(JSON.stringify({ type: 'poll:vote', data: { pollId, option } }));
 
-        // Disable buttons and highlight voted
         const card = document.getElementById('poll-' + pollId);
         if (card) {
           const buttons = card.querySelectorAll('.poll-buttons button');
           buttons.forEach((btn, i) => {
-            btn.disabled = true;
             if (i === option) btn.classList.add('voted');
+            else btn.classList.remove('voted');
           });
         }
       }

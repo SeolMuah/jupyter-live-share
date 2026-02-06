@@ -323,8 +323,12 @@ export function startWsServer(
           const option = Math.floor(Number(voteData.option));
           if (isNaN(option) || option < 0 || option >= currentPoll.optionCount) return;
 
-          // Duplicate vote check (server-side)
-          if (currentPoll.voterChoices.has(ws)) return;
+          // 투표 변경 허용 (1인 1표 유지: 이전 투표 취소 후 새 투표 반영)
+          const previousVote = currentPoll.voterChoices.get(ws);
+          if (previousVote !== undefined) {
+            if (previousVote === option) return; // 같은 선택지 재클릭 무시
+            currentPoll.votes[previousVote]--;
+          }
 
           currentPoll.voterChoices.set(ws, option);
           currentPoll.votes[option]++;

@@ -401,6 +401,12 @@ socket.emit('join', {
   teacherPanel: true    // localhost에서만 허용, 접속자 수 미포함
 });
 
+// 세션 참여 (VS Code Viewer Chat Panel — chatOnly 연결)
+socket.emit('join', {
+  chatOnly: true,       // 채팅/설문 전용, 접속자 수 미포함, isTeacher=false
+  pin?: string
+});
+
 // 참여 결과
 socket.on('join:result', {
   success: boolean,
