@@ -5,7 +5,6 @@ import { TunnelManager } from '../server/tunnel';
 import { startWatching, stopWatching } from '../notebook/watcher';
 import { StatusBarManager } from './statusBar';
 import { SessionViewProvider } from './sidebarView';
-import { ChatPanelProvider } from './chatPanelView';
 import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
 
@@ -26,7 +25,6 @@ export async function startSession(
   context: vscode.ExtensionContext,
   statusBar: StatusBarManager,
   sidebarView?: SessionViewProvider,
-  chatPanel?: ChatPanelProvider,
   teacherNameParam?: string
 ) {
   if (isRunning) {
@@ -34,17 +32,12 @@ export async function startSession(
     return;
   }
 
-  // 활성 에디터 확인 (노트북 또는 텍스트)
+  // 활성 에디터 확인 (노트북 또는 텍스트) — 파일 없이도 세션 시작 가능
   const notebookEditor = vscode.window.activeNotebookEditor;
   const textEditor = vscode.window.activeTextEditor;
 
   const isNotebook = notebookEditor && notebookEditor.notebook.notebookType === 'jupyter-notebook';
   const isTextFile = textEditor && textEditor.document.uri.scheme === 'file';
-
-  if (!isNotebook && !isTextFile) {
-    vscode.window.showErrorMessage('Please open a file first (.ipynb, .py, .txt, .md, etc.).');
-    return;
-  }
 
   const config = getConfig();
 
@@ -96,8 +89,10 @@ export async function startSession(
         let fileName: string;
         if (isNotebook) {
           fileName = notebookEditor!.notebook.uri.path.split('/').pop() || 'notebook.ipynb';
-        } else {
+        } else if (isTextFile) {
           fileName = textEditor!.document.uri.path.split('/').pop() || 'untitled.txt';
+        } else {
+          fileName = '(대기 중)';
         }
 
         statusBar.show(0, tunnelUrl);
@@ -109,10 +104,6 @@ export async function startSession(
           viewerCount: 0,
           fileName,
         });
-
-        // 채팅 패널 연결 & context key 설정
-        vscode.commands.executeCommand('setContext', 'jupyterLiveShare.sessionActive', true);
-        chatPanel?.connect(config.port);
 
         // URL 클립보드 복사
         await vscode.env.clipboard.writeText(tunnelUrl);
@@ -135,17 +126,16 @@ export async function startSession(
       `Failed to start session: ${err instanceof Error ? err.message : String(err)}`
     );
     // 정리
-    await cleanupSession(statusBar, sidebarView, chatPanel);
+    await cleanupSession(statusBar, sidebarView);
   }
 }
 
 export async function stopSession(
   statusBar: StatusBarManager,
   sidebarView?: SessionViewProvider,
-  chatPanel?: ChatPanelProvider
 ) {
   if (!isRunning) return;
-  await cleanupSession(statusBar, sidebarView, chatPanel);
+  await cleanupSession(statusBar, sidebarView);
   vscode.window.showInformationMessage('Jupyter Live Share session stopped.');
 }
 
@@ -234,13 +224,8 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
 async function cleanupSession(
   statusBar: StatusBarManager,
   sidebarView?: SessionViewProvider,
-  chatPanel?: ChatPanelProvider
 ) {
   isRunning = false;
-
-  // 채팅 패널 해제 & context key 해제
-  chatPanel?.disconnect();
-  vscode.commands.executeCommand('setContext', 'jupyterLiveShare.sessionActive', false);
 
   stopWatching();
 

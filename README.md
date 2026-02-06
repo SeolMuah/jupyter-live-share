@@ -7,7 +7,8 @@
 - **Jupyter Notebook 실시간 공유** (`.ipynb`): 셀 편집, 실행 결과, 셀 추가/삭제가 실시간 반영
 - **텍스트 파일 공유** (`.py`, `.txt`, `.md` 등): 구문 하이라이팅 및 Markdown 렌더링 지원
 - **선생님 커서 실시간 공유**: 노트북 및 텍스트 파일 모두에서 선생님의 커서 위치, 라인 하이라이트, 텍스트 선택 영역을 학생 화면에 실시간 표시
-- **실시간 채팅**: 선생님은 VS Code 사이드바 + 터미널 영역 Chat 패널에서, 학생은 브라우저에서 메시지 교환 (스팸 방지 Rate Limiting)
+- **실시간 채팅**: 선생님은 VS Code 사이드바에서, 학생은 브라우저 또는 VS Code Viewer Chat 패널에서 메시지 교환 (스팸 방지 Rate Limiting)
+- **선생님 메시지 강조**: 선생님 채팅 메시지는 초록색 배경으로 구분 표시 (사이드바, Viewer Chat, 브라우저 모두 적용)
 - **실시간 설문조사 (Poll)**: 숫자 모드(1, 2, 3...) 및 텍스트 모드(사용자 정의 선택지) 지원, 실시간 막대 그래프 결과 표시
 - **선생님 이름 설정**: 세션 시작 전 사이드바에서 표시 이름 변경 가능 (기본값: "Teacher")
 - **Cloudflare Tunnel**: 별도 서버 없이 외부 HTTPS URL로 접속 가능
@@ -33,7 +34,7 @@
 ### VSIX 파일로 설치 (권장)
 
 ```bash
-code --install-extension jupyter-live-share-1.1.0.vsix
+code --install-extension jupyter-live-share-1.2.0.vsix
 ```
 
 또는 VS Code → Extensions → `...` → "Install from VSIX..." 에서 `.vsix` 파일 선택
@@ -54,7 +55,7 @@ VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
    - 또는 `Ctrl+Shift+P` → `Jupyter Live Share: Start Session`
 4. 상태바에 표시되는 URL을 학생들에게 공유 (자동으로 클립보드에 복사됨)
 5. 사이드바에 세션 정보(URL, 파일명, 접속자 수) + 채팅 패널이 표시됨
-6. 터미널 영역에 **Live Chat** 패널이 자동으로 나타남 (세션 활성화 시에만 표시)
+6. 파일을 아직 열지 않은 상태에서도 세션 시작 가능 (학생에게 빈 화면 표시, 이후 파일 열면 자동 공유)
 
 ### 세션 종료
 
@@ -65,14 +66,19 @@ VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
 
 **선생님 (VS Code):**
 - 세션 시작 시 사이드바 하단에 채팅 영역이 자동으로 표시됨
-- 터미널 영역에 **Live Chat** 패널이 자동으로 표시됨 (더 넓은 채팅 공간)
-- 사이드바 또는 Live Chat 패널에서 메시지 입력 및 전송
+- 사이드바에서 메시지 입력 및 전송
 - 세션 시작 전 설정한 표시 이름(기본: "Teacher")으로 자동 설정 (접속자 수에 포함되지 않음)
 - 선생님 닉네임은 초록색, 학생 닉네임은 파란색으로 구분 표시
+- 선생님 메시지는 초록색 배경으로 강조 표시
 
 **학생 (브라우저 뷰어):**
 - 뷰어 하단의 **Chat** 버튼을 클릭하면 오른쪽에 채팅 패널이 열림
 - 접속 시 이름을 입력해야 채팅 가능 (localStorage에 저장되어 재접속 시 자동 입력)
+
+**학생 (VS Code Open Viewer):**
+- VS Code 하단 터미널 영역의 **Viewer Chat** 패널에서 채팅
+- Open Viewer 사용 시 뷰어 패널의 채팅은 숨겨지고, 별도 패널로 분리됨
+- 별도의 chatOnly WebSocket으로 접속자 수에 포함되지 않음
 
 **공통:**
 - 설문 시작/종료 시 채팅에 시스템 메시지가 자동 표시 (결과 포함)
@@ -147,7 +153,7 @@ jupyter-live-share/
 │   ├── extension.ts          # Extension 진입점
 │   ├── server/               # HTTP + WebSocket 서버
 │   ├── notebook/             # 노트북 변경 감지 + 직렬화
-│   ├── ui/                   # StatusBar, Sidebar, Chat Panel, Commands
+│   ├── ui/                   # StatusBar, Sidebar, Viewer Chat, ViewerPanel, Commands
 │   └── utils/                # 설정, 로깅
 ├── viewer/                   # 브라우저 뷰어 (Vanilla JS)
 ├── bin/                      # cloudflared 바이너리
@@ -192,11 +198,11 @@ npm run build
 
 | 테스트 | 동작 | 확인 |
 |--------|------|------|
-| 사이드바 채팅 | VS Code 사이드바에서 메시지 입력 | 브라우저에 선생님 메시지 표시 (초록색 닉네임) |
-| 터미널 채팅 | Live Chat 패널에서 메시지 입력 | 브라우저에 선생님 메시지 표시 |
-| 학생→사이드바 | 브라우저에서 메시지 전송 | VS Code 사이드바 + Live Chat에 학생 메시지 표시 (파란색 닉네임) |
+| 사이드바 채팅 | VS Code 사이드바에서 메시지 입력 | 브라우저에 선생님 메시지 표시 (초록색 배경) |
+| 학생→사이드바 | 브라우저에서 메시지 전송 | VS Code 사이드바에 학생 메시지 표시 (파란색 닉네임) |
 | 브라우저 채팅 | Chat 버튼 클릭 | 오른쪽에 채팅 패널 슬라이드 |
 | 닉네임 색상 | 선생님/학생 메시지 전송 | 선생님=초록색, 학생=파란색 |
+| 메시지 배경 | 선생님 메시지 확인 | 선생님 메시지는 초록색 배경으로 강조 |
 | Rate Limit | 학생 탭에서 빠르게 연속 전송 | 에러 메시지 표시 |
 | 접속자 수 | 사이드바 Viewers 확인 | Teacher Panel은 접속자 수에 미포함 |
 
@@ -243,7 +249,8 @@ npm run build
 | 실시간 편집 | 호스트 타이핑 → 뷰어 반영 |
 | 셀 실행 | 호스트 실행 → 출력 표시 |
 | 테마 | ☀️ 버튼으로 다크/라이트 전환 |
-| 채팅 | Chat 버튼 클릭 → 채팅 패널 열림 |
+| 채팅 | 하단 Viewer Chat 패널에서 채팅 (뷰어 내 Chat 버튼 숨김) |
+| 설문 투표 | Viewer Chat 패널에서 설문 카드 투표 가능 |
 | 재연결 | Open Viewer 재실행 → 기존 패널에서 새 URL 연결 |
 
 **Step 4: 파일 전환 테스트**
@@ -290,13 +297,46 @@ vsce package       # VSIX 패키징
 
 ## 변경 이력
 
+### v1.2.0
+
+**VS Code Viewer 채팅 분리**
+
+- Open Viewer 사용 시 채팅이 메인 뷰어 패널에서 분리되어 터미널 영역의 **Viewer Chat** 패널로 이동
+- `viewsContainers.panel`을 통해 VS Code 하단 패널(터미널 탭 영역)에 Viewer Chat 탭 등록
+- 별도의 `chatOnly` WebSocket 연결로 접속자 수에 포함되지 않음
+- PIN 인증, 이름 설정, 설문 투표 등 기존 기능 모두 지원
+- 브라우저 뷰어는 기존과 동일하게 동작 (변경 없음)
+
+**Live Chat 패널 제거**
+
+- 터미널 영역의 Live Chat 패널을 제거 — 선생님은 왼쪽 사이드바에서만 채팅
+- `ChatPanelProvider` 및 관련 코드 완전 삭제
+
+**선생님 메시지 강조**
+
+- 선생님 채팅 메시지에 초록색 배경 적용 (사이드바, Viewer Chat, 브라우저 뷰어 모두)
+- `chatOnly` (VS Code 학생) 연결은 localhost여도 `isTeacher=false`로 정확히 구분
+- 다크/라이트 모드 모두 지원
+
+**파일 없이 세션 시작 가능**
+
+- 파일을 열지 않은 상태에서도 세션 시작 가능 (학생에게 빈 화면 표시)
+- 이후 파일을 열면 자동으로 공유 시작
+
+**Viewer Chat 안읽은 메시지 뱃지**
+
+- Viewer Chat 패널이 보이지 않을 때 새 메시지가 오면 탭에 숫자 뱃지 표시
+- 패널을 열면 뱃지 자동 초기화
+
+**설문 시작 시 Viewer Chat 자동 표시**
+
+- 설문이 시작되면 Viewer Chat 패널이 자동으로 열림 (학생이 즉시 투표 가능)
+
+**설문 카드 UI 개선**
+
+- Viewer Chat 패널의 설문 카드가 메시지와 동일한 너비/위치로 정렬
+
 ### v1.1.0
-
-**터미널 영역 Live Chat 패널**
-
-- VS Code 터미널 영역(하단 패널)에 전용 채팅 패널 추가 — 사이드바보다 넓은 채팅 공간 제공
-- 세션 활성화 시에만 자동으로 표시 (`when: "jupyterLiveShare.sessionActive"`)
-- 사이드바 채팅과 동일한 기능: 메시지 송수신, 설문 카드, 시스템 메시지
 
 **선생님 표시 이름 설정**
 

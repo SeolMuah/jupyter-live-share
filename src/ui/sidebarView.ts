@@ -39,8 +39,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri],
     };
 
-    webviewView.webview.html = this._getHtml(webviewView.webview);
-
+    // 핸들러를 HTML 설정 전에 등록 (ready 메시지 유실 방지)
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'command') {
         this._onCommand?.(msg.command, msg.data);
@@ -48,6 +47,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         this._sendState();
       }
     });
+
+    webviewView.webview.html = this._getHtml(webviewView.webview);
   }
 
   updateState(update: Partial<SessionState>) {
@@ -261,6 +262,10 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-editor-background);
       border-radius: 4px;
       border: 1px solid var(--vscode-panel-border);
+    }
+    .chat-msg.teacher-msg .chat-text {
+      background: color-mix(in srgb, #2ea043 12%, var(--vscode-editor-background));
+      border-color: color-mix(in srgb, #2ea043 25%, var(--vscode-panel-border));
     }
     .chat-system {
       text-align: center;
@@ -729,7 +734,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       function addChatMessage(data) {
         const div = document.createElement('div');
-        div.className = 'chat-msg';
+        div.className = 'chat-msg' + (data.isTeacher ? ' teacher-msg' : '');
 
         const header = document.createElement('div');
         header.className = 'chat-msg-header';

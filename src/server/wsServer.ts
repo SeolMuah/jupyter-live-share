@@ -162,7 +162,7 @@ export function startWsServer(
         const msg: WsMessage = JSON.parse(raw.toString());
 
         if (msg.type === 'join') {
-          const joinData = msg.data as { pin?: string; teacherPanel?: boolean };
+          const joinData = msg.data as { pin?: string; teacherPanel?: boolean; chatOnly?: boolean };
 
           // Teacher Panel connection (sidebar WebSocket)
           if (joinData.teacherPanel && meta.isTeacher) {
@@ -188,6 +188,39 @@ export function startWsServer(
               });
             }
             // Don't increment viewerCount or broadcast viewers:count
+            if (onNewViewer) {
+              onNewViewer(ws);
+            }
+            return;
+          }
+
+          // Chat-only connection (VS Code viewer chat panel)
+          if (joinData.chatOnly) {
+            if (sessionPin && joinData.pin !== sessionPin) {
+              sendTo(ws, 'join:result', { success: false, error: 'Invalid PIN' });
+              ws.close(4001, 'Invalid PIN');
+              return;
+            }
+            meta.authenticated = true;
+            // chatOnly는 학생 연결 — localhost여도 isTeacher=false
+            meta.isTeacher = false;
+            // NOT counted as viewer
+            sendTo(ws, 'join:result', { success: true });
+            // Send current poll state if active
+            if (currentPoll) {
+              sendTo(ws, 'poll:start', {
+                pollId: currentPoll.pollId,
+                question: currentPoll.question,
+                optionCount: currentPoll.optionCount,
+                ...(currentPoll.options ? { options: currentPoll.options } : {}),
+              });
+              sendTo(ws, 'poll:results', {
+                pollId: currentPoll.pollId,
+                votes: [...currentPoll.votes],
+                totalVoters: currentPoll.voterChoices.size,
+                ...(currentPoll.options ? { options: currentPoll.options } : {}),
+              });
+            }
             if (onNewViewer) {
               onNewViewer(ws);
             }

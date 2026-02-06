@@ -3,6 +3,13 @@
 (function () {
   'use strict';
 
+  // VS Code Webview detection
+  const isVSCodeWebview = typeof window.__VSCODE_WEBVIEW__ !== 'undefined';
+  let vscodeApi = null;
+  if (isVSCodeWebview) {
+    try { vscodeApi = acquireVsCodeApi(); } catch(e) { /* ignore */ }
+  }
+
   // State
   let notebookCells = [];
   let needsPin = false;
@@ -20,6 +27,7 @@
   let unreadCount = 0;
   let currentPollId = null;
   let hasVoted = false;
+  let lastUsedPin = null;
 
   const MAX_CHAT_DOM = 200;
 
@@ -68,6 +76,12 @@
   function init() {
     // Theme
     initTheme();
+
+    // VS Code Webview: hide chat UI (chat handled by separate Viewer Chat panel)
+    if (isVSCodeWebview) {
+      if (chatPanel) chatPanel.style.display = 'none';
+      if (btnChat) btnChat.style.display = 'none';
+    }
 
     // Teacher UI (직접 브라우저 접속 시)
     if (isTeacher) {
@@ -137,6 +151,9 @@
     myNickname = name;
     localStorage.setItem('jls-nickname', name);
     WsClient.send('join:name', { nickname: name });
+    if (vscodeApi) {
+      vscodeApi.postMessage({ type: 'nameSet', nickname: name });
+    }
     nameScreen.style.display = 'none';
     toolbar.style.display = 'flex';
   }
@@ -145,6 +162,9 @@
     if (isTeacher) {
       // Teacher skips name screen
       WsClient.send('join:name', { nickname: 'Teacher' });
+      if (vscodeApi) {
+        vscodeApi.postMessage({ type: 'nameSet', nickname: 'Teacher' });
+      }
       toolbar.style.display = 'flex';
       return;
     }
@@ -152,6 +172,9 @@
     // Reconnection: if student already has nickname, skip name screen
     if (myNickname) {
       WsClient.send('join:name', { nickname: myNickname });
+      if (vscodeApi) {
+        vscodeApi.postMessage({ type: 'nameSet', nickname: myNickname });
+      }
       toolbar.style.display = 'flex';
       return;
     }
@@ -250,6 +273,10 @@
     if (data.success) {
       pinScreen.style.display = 'none';
       needsPin = false;
+      // Notify VS Code extension of successful auth (include PIN for chat panel)
+      if (vscodeApi) {
+        vscodeApi.postMessage({ type: 'authenticated', wsUrl: window.__WS_URL__, pin: lastUsedPin });
+      }
       // Show name screen (or skip for teacher)
       showNameScreen();
     } else {
@@ -367,8 +394,11 @@
   // === Chat ===
 
   function handleChatBroadcast(data) {
+    // VS Code mode: chat handled by separate Viewer Chat panel
+    if (isVSCodeWebview) return;
+
     const msgEl = document.createElement('div');
-    msgEl.className = 'chat-msg';
+    msgEl.className = 'chat-msg' + (data.isTeacher ? ' teacher-msg' : '');
 
     const header = document.createElement('div');
     header.className = 'chat-msg-header';
@@ -406,6 +436,9 @@
   }
 
   function handleChatError(data) {
+    // VS Code mode: chat handled by separate Viewer Chat panel
+    if (isVSCodeWebview) return;
+
     const errEl = document.createElement('div');
     errEl.className = 'chat-error';
     errEl.textContent = data.error;
@@ -487,6 +520,9 @@
       hasVoted = true;
     }
 
+    // VS Code mode: poll handled by separate Viewer Chat panel, only track state
+    if (isVSCodeWebview) return;
+
     // Idempotency: skip if card already exists (e.g. reconnection)
     const existingCard = document.getElementById('poll-card-' + data.pollId);
     if (existingCard) return;
@@ -562,6 +598,7 @@
   }
 
   function handlePollResults(data) {
+    if (isVSCodeWebview) return;
     if (data.pollId !== currentPollId) return;
     const card = document.getElementById('poll-card-' + data.pollId);
     if (card) {
@@ -576,8 +613,10 @@
   function handlePollEnd(data) {
     // Find the poll card (use saved pollId from data, or find the latest card)
     const cardId = data.pollId || currentPollId;
-    const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
     currentPollId = null;
+    if (isVSCodeWebview) return;
+
+    const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
 
     if (card) {
       const opts = data.options || (card.dataset.options ? JSON.parse(card.dataset.options) : null);
@@ -697,6 +736,7 @@
     const pin = pinInput.value.trim();
     if (!pin) return;
 
+    lastUsedPin = pin;
     pinError.style.display = 'none';
     WsClient.disconnect();
     WsClient.connect(handleMessage, handleStatus, pin);

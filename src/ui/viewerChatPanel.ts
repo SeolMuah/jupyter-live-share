@@ -1,15 +1,19 @@
 import * as vscode from 'vscode';
 
 /**
- * VS Code 하단 패널 (터미널 영역)에 표시되는 Live Chat WebviewView.
- * 세션 시작 시 WebSocket으로 자동 연결하여 채팅/투표를 관리한다.
+ * VS Code 하단 패널 (터미널 영역)에 표시되는 Viewer Chat WebviewView.
+ * 학생이 Open Viewer로 세션에 참여할 때 채팅/투표를 전용 패널에서 처리한다.
+ * chatOnly 연결로 접속자 수에 포함되지 않음.
  */
-export class ChatPanelProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'jupyterLiveShare.chatPanel';
+export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'jupyterLiveShare.viewerChatPanel';
 
   private _view?: vscode.WebviewView;
-  private _port: number | null = null;
-  private _isRunning = false;
+  private _wsUrl: string | null = null;
+  private _pin: string | null = null;
+  private _nickname: string | null = null;
+  private _isConnected = false;
+  private _unreadCount = 0;
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -25,33 +29,80 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri],
     };
 
-    webviewView.webview.html = this._getHtml(webviewView.webview);
+    // Webview dispose 시 참조 정리
+    webviewView.onDidDispose(() => {
+      this._view = undefined;
+    });
 
-    // WebviewView가 준비되면 현재 상태 전달
+    // 패널이 보이게 되면 안읽은 메시지 뱃지 초기화
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this._unreadCount = 0;
+        this._updateBadge();
+      }
+    });
+
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'ready') {
-        if (this._isRunning && this._port) {
+        if (this._isConnected && this._wsUrl) {
           this._view?.webview.postMessage({
             type: 'connect',
-            port: this._port,
+            wsUrl: this._wsUrl,
+            pin: this._pin,
+            nickname: this._nickname,
           });
         }
+      } else if (msg.type === 'newMessage') {
+        // 패널이 보이지 않을 때만 안읽은 메시지 카운트 증가
+        if (this._view && !this._view.visible) {
+          this._unreadCount++;
+          this._updateBadge();
+        }
+      } else if (msg.type === 'pollStarted') {
+        // 투표 시작 시 패널을 강제로 표시
+        this._view?.show?.(true);
       }
+    });
+
+    webviewView.webview.html = this._getHtml(webviewView.webview);
+  }
+
+  /** ViewerPanel 인증 성공 시 호출 — WebSocket 연결 지시 */
+  connect(wsUrl: string, pin?: string): void {
+    this._wsUrl = wsUrl;
+    this._pin = pin || null;
+    this._isConnected = true;
+    this._view?.webview.postMessage({
+      type: 'connect',
+      wsUrl,
+      pin: this._pin,
+      nickname: this._nickname,
     });
   }
 
-  /** 세션 시작 시 호출 — WebSocket 연결 지시 */
-  connect(port: number): void {
-    this._port = port;
-    this._isRunning = true;
-    this._view?.webview.postMessage({ type: 'connect', port });
+  /** 학생 이름 설정 시 호출 */
+  setName(nickname: string): void {
+    this._nickname = nickname;
+    this._view?.webview.postMessage({ type: 'setName', nickname });
   }
 
-  /** 세션 종료 시 호출 — WebSocket 해제 지시 */
+  /** ViewerPanel 닫힐 때 호출 — WebSocket 해제 */
   disconnect(): void {
-    this._port = null;
-    this._isRunning = false;
+    this._wsUrl = null;
+    this._pin = null;
+    this._nickname = null;
+    this._isConnected = false;
+    this._unreadCount = 0;
+    this._updateBadge();
     this._view?.webview.postMessage({ type: 'disconnect' });
+  }
+
+  /** 안읽은 메시지 뱃지 업데이트 */
+  private _updateBadge(): void {
+    if (!this._view) return;
+    this._view.badge = this._unreadCount > 0
+      ? { tooltip: `${this._unreadCount}개의 새 메시지`, value: this._unreadCount }
+      : undefined;
   }
 
   private _getHtml(webview: vscode.Webview): string {
@@ -61,7 +112,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws://localhost:* http://localhost:*;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws: wss: http: https:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     /* === Reset & Base === */
@@ -174,10 +225,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       word-wrap: break-word;
       white-space: pre-wrap;
     }
-    .msg.self .msg-text {
-      background: color-mix(in srgb, var(--vscode-textLink-foreground) 12%, var(--vscode-editor-background));
-      border-top-left-radius: 8px;
-      border-top-right-radius: 2px;
+    .msg.teacher-msg .msg-text {
+      background: color-mix(in srgb, #2ea043 12%, var(--vscode-editor-background));
+      border-color: color-mix(in srgb, #2ea043 25%, var(--vscode-panel-border, var(--vscode-widget-border, transparent)));
     }
 
     /* 시스템 메시지 */
@@ -192,7 +242,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     /* === 투표 카드 === */
     .poll-card {
-      margin: 8px 0;
+      margin: 8px 0 8px 36px;
       padding: 10px 12px;
       background: var(--vscode-editor-background);
       border: 1px solid var(--vscode-textLink-foreground, #3794ff);
@@ -208,6 +258,38 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
       margin-bottom: 8px;
     }
+
+    /* 투표 버튼 */
+    .poll-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    .poll-buttons button {
+      padding: 4px 12px;
+      font-size: 12px;
+      border: 1px solid var(--vscode-button-background);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--vscode-button-background);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .poll-buttons button:hover:not(:disabled) {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .poll-buttons button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .poll-buttons button.voted {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      opacity: 1;
+    }
+
     .poll-results { margin-top: 6px; }
     .poll-bar-row {
       display: flex;
@@ -294,7 +376,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       opacity: 0.4;
       cursor: default;
     }
-    /* Send icon (SVG arrow) */
     .send-btn svg {
       width: 16px;
       height: 16px;
@@ -309,7 +390,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <!-- 비연결 상태 -->
   <div class="placeholder" id="placeholder">
     <span class="placeholder-icon">💬</span>
-    <span>Start a session to chat</span>
+    <span>Open Viewer to chat</span>
   </div>
 
   <!-- 채팅 영역 -->
@@ -335,6 +416,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       let ws = null;
       let connected = false;
+      let nickname = null;
       const MAX_MESSAGES = 300;
 
       // 준비 완료 알림
@@ -342,16 +424,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       // === WebSocket 관리 ===
 
-      function connectWs(port) {
+      function connectWs(wsUrl, pin, nick) {
         disconnectWs();
+        nickname = nick || nickname;
         try {
-          ws = new WebSocket('ws://localhost:' + port);
+          ws = new WebSocket(wsUrl);
 
           ws.onopen = () => {
-            ws.send(JSON.stringify({ type: 'join', data: { teacherPanel: true } }));
+            ws.send(JSON.stringify({ type: 'join', data: { chatOnly: true, pin: pin || undefined } }));
             connected = true;
             showChat();
-            addSystem('Connected');
+            addSystem('Chat connected');
           };
 
           ws.onmessage = (event) => {
@@ -364,7 +447,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           ws.onclose = () => {
             connected = false;
             ws = null;
-            addSystem('Disconnected');
+            addSystem('Chat disconnected');
           };
 
           ws.onerror = () => { /* onclose handles cleanup */ };
@@ -397,11 +480,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       function handleMessage(msg) {
         switch (msg.type) {
+          case 'join:result':
+            if (msg.data.success && nickname) {
+              ws.send(JSON.stringify({ type: 'join:name', data: { nickname: nickname } }));
+            }
+            break;
           case 'chat:broadcast':
             addChatMsg(msg.data);
+            vscodeApi.postMessage({ type: 'newMessage' });
+            break;
+          case 'chat:error':
+            addSystem(msg.data.error);
             break;
           case 'poll:start':
             addPollCard(msg.data);
+            vscodeApi.postMessage({ type: 'pollStarted' });
             break;
           case 'poll:results':
             updatePollResults(msg.data);
@@ -419,22 +512,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       // === 채팅 메시지 렌더 ===
 
       function addChatMsg(data) {
-        const isSelf = data.isTeacher;
         const initial = (data.nickname || '?')[0];
 
         const div = document.createElement('div');
-        div.className = 'msg' + (isSelf ? ' self' : '');
+        div.className = 'msg' + (data.isTeacher ? ' teacher-msg' : '');
 
-        // Avatar
         const avatar = document.createElement('div');
         avatar.className = 'avatar ' + (data.isTeacher ? 'teacher' : 'student');
         avatar.textContent = initial;
 
-        // Body
         const body = document.createElement('div');
         body.className = 'msg-body';
 
-        // Header
         const header = document.createElement('div');
         header.className = 'msg-header';
 
@@ -450,7 +539,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         header.appendChild(name);
         header.appendChild(time);
 
-        // Text
         const text = document.createElement('div');
         text.className = 'msg-text';
         text.textContent = data.text;
@@ -476,8 +564,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       // === 투표 카드 ===
 
+      let currentPollId = null;
+
       function addPollCard(data) {
+        currentPollId = data.pollId;
         if (data.pollId && document.getElementById('poll-' + data.pollId)) return;
+
+        // Check localStorage for previous vote
+        const savedVote = localStorage.getItem('jls-poll-' + data.pollId);
+        const hasVoted = savedVote !== null;
 
         const card = document.createElement('div');
         card.className = 'poll-card';
@@ -486,8 +581,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
         const q = document.createElement('div');
         q.className = 'poll-question';
-        q.textContent = '📊 ' + data.question;
+        q.textContent = '\u{1F4CA} ' + data.question;
         card.appendChild(q);
+
+        // Vote buttons
+        const buttonsEl = document.createElement('div');
+        buttonsEl.className = 'poll-buttons';
+        for (let i = 0; i < data.optionCount; i++) {
+          const btn = document.createElement('button');
+          btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
+          btn.dataset.option = i;
+          if (hasVoted) {
+            btn.disabled = true;
+            if (parseInt(savedVote) === i) btn.classList.add('voted');
+          } else {
+            btn.addEventListener('click', () => votePoll(data.pollId, i));
+          }
+          buttonsEl.appendChild(btn);
+        }
+        card.appendChild(buttonsEl);
 
         const results = document.createElement('div');
         results.className = 'poll-results';
@@ -503,6 +615,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         scrollToBottom();
       }
 
+      function votePoll(pollId, option) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        localStorage.setItem('jls-poll-' + pollId, option.toString());
+        ws.send(JSON.stringify({ type: 'poll:vote', data: { pollId, option } }));
+
+        // Disable buttons and highlight voted
+        const card = document.getElementById('poll-' + pollId);
+        if (card) {
+          const buttons = card.querySelectorAll('.poll-buttons button');
+          buttons.forEach((btn, i) => {
+            btn.disabled = true;
+            if (i === option) btn.classList.add('voted');
+          });
+        }
+      }
+
       function updatePollResults(data) {
         const card = data.pollId ? document.getElementById('poll-' + data.pollId) : null;
         if (!card) return;
@@ -514,7 +642,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       function endPollCard(data) {
-        const card = data.pollId ? document.getElementById('poll-' + data.pollId) : null;
+        const cardId = data.pollId || currentPollId;
+        const card = cardId ? document.getElementById('poll-' + cardId) : null;
+        currentPollId = null;
         if (!card) return;
         const opts = data.options || (card.dataset.options ? JSON.parse(card.dataset.options) : null);
         const resultsEl = card.querySelector('.poll-results');
@@ -522,6 +652,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (resultsEl) renderBars(resultsEl, data.finalVotes || [], data.totalVoters || 0, opts);
         if (statusEl) statusEl.textContent = '투표 종료 — 총 ' + (data.totalVoters || 0) + '명';
         card.classList.add('ended');
+        // Disable buttons
+        const buttons = card.querySelectorAll('.poll-buttons button');
+        buttons.forEach(btn => { btn.disabled = true; });
       }
 
       function renderBars(container, votes, total, options) {
@@ -589,8 +722,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       window.addEventListener('message', (event) => {
         const msg = event.data;
-        if (msg.type === 'connect' && msg.port) {
-          connectWs(msg.port);
+        if (msg.type === 'connect' && msg.wsUrl) {
+          connectWs(msg.wsUrl, msg.pin, msg.nickname);
+        } else if (msg.type === 'setName' && msg.nickname) {
+          nickname = msg.nickname;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'join:name', data: { nickname: msg.nickname } }));
+          }
         } else if (msg.type === 'disconnect') {
           disconnectWs();
           hideChat();

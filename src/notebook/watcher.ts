@@ -123,12 +123,58 @@ export function startWatching() {
 
   // 노트북이 아니면 텍스트 에디터 확인
   const activeTextEditor = vscode.window.activeTextEditor;
-  if (activeTextEditor) {
+  if (activeTextEditor && activeTextEditor.document.uri.scheme === 'file') {
     startWatchingTextDocument(activeTextEditor.document);
     return;
   }
 
-  Logger.warn('No active editor found for watching');
+  // 파일 없이 세션 시작 — idle 모드로 대기
+  startWatchingIdle();
+}
+
+/**
+ * Idle mode: 파일이 아직 열리지 않은 상태에서 에디터 변경을 감시.
+ * 파일이 열리면 자동으로 해당 모드(notebook/plaintext)로 전환.
+ */
+function startWatchingIdle() {
+  watchMode = null;
+  currentNotebook = null;
+  currentTextDocument = null;
+  Logger.info('Watching in idle mode (no active file)');
+
+  // 노트북 에디터 활성화 감지
+  disposables.push(
+    vscode.window.onDidChangeActiveNotebookEditor((editor) => {
+      if (editor && editor.notebook.notebookType === 'jupyter-notebook') {
+        // idle 리스너 정리 후 노트북 모드로 전환
+        cleanupIdleAndSwitch(() => startWatchingNotebook(editor.notebook));
+      }
+    })
+  );
+
+  // 텍스트 에디터 활성화 감지
+  disposables.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (!editor) return;
+      if (editor.document.uri.scheme === 'vscode-notebook-cell') return;
+      if (editor.document.uri.scheme !== 'file') return;
+
+      // idle 리스너 정리 후 텍스트 모드로 전환
+      cleanupIdleAndSwitch(() => startWatchingTextDocument(editor.document));
+    })
+  );
+}
+
+/**
+ * Idle 모드의 리스너를 정리하고 새 모드를 시작.
+ */
+function cleanupIdleAndSwitch(startNewMode: () => void) {
+  for (const d of disposables) {
+    d.dispose();
+  }
+  disposables = [];
+  setupNewViewerHandler();
+  startNewMode();
 }
 
 function startWatchingNotebook(notebook: vscode.NotebookDocument) {

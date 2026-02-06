@@ -829,6 +829,16 @@ footer label {
   border: 1px solid var(--border-color);
 }
 
+.chat-msg.teacher-msg .chat-text {
+  background: color-mix(in srgb, #2ea043 10%, var(--bg-cell));
+  border-color: color-mix(in srgb, #2ea043 25%, var(--border-color));
+}
+
+[data-theme="dark"] .chat-msg.teacher-msg .chat-text {
+  background: color-mix(in srgb, #3fb950 12%, var(--bg-cell));
+  border-color: color-mix(in srgb, #3fb950 20%, var(--border-color));
+}
+
 .chat-system {
   text-align: center;
   padding: 4px 8px;

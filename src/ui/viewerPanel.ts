@@ -1,22 +1,60 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { Logger } from '../utils/logger';
+import { ViewerChatPanelProvider } from './viewerChatPanel';
 
 export class ViewerPanel {
   public static currentPanel: ViewerPanel | undefined;
   private static readonly viewType = 'jupyterLiveShare.viewer';
+  private static chatPanel: ViewerChatPanelProvider | undefined;
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
   private disposables: vscode.Disposable[] = [];
+  private wsUrl: string;
+
+  /** ViewerChatPanelProvider 참조 설정 (extension.ts에서 호출) */
+  public static setChatPanel(provider: ViewerChatPanelProvider): void {
+    ViewerPanel.chatPanel = provider;
+  }
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, serverUrl: string) {
     this.panel = panel;
     this.extensionUri = extensionUri;
+    this.wsUrl = serverUrl;
+
+    // 메시지 핸들러를 HTML 설정 전에 등록
+    this.panel.webview.onDidReceiveMessage(
+      (msg) => this.handleWebviewMessage(msg),
+      null,
+      this.disposables
+    );
 
     this.panel.webview.html = this.getHtmlContent(serverUrl);
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+
+    // Viewer Chat 패널을 하단 패널에서 포커스
+    setTimeout(() => {
+      vscode.commands.executeCommand('jupyterLiveShare.viewerChatPanel.focus');
+    }, 300);
+  }
+
+  private handleWebviewMessage(msg: { type: string; wsUrl?: string; nickname?: string; pin?: string }): void {
+    switch (msg.type) {
+      case 'authenticated':
+        // Viewer successfully authenticated — connect chat panel
+        if (ViewerPanel.chatPanel && msg.wsUrl) {
+          ViewerPanel.chatPanel.connect(msg.wsUrl, msg.pin);
+        }
+        break;
+      case 'nameSet':
+        // Student entered name — relay to chat panel
+        if (ViewerPanel.chatPanel && msg.nickname) {
+          ViewerPanel.chatPanel.setName(msg.nickname);
+        }
+        break;
+    }
   }
 
   public static async createOrShow(context: vscode.ExtensionContext) {
@@ -43,8 +81,11 @@ export class ViewerPanel {
     // 기존 패널이 있으면 재사용
     if (ViewerPanel.currentPanel) {
       ViewerPanel.currentPanel.panel.reveal(vscode.ViewColumn.Beside);
+      ViewerPanel.currentPanel.wsUrl = wsUrl;
       ViewerPanel.currentPanel.panel.webview.html =
         ViewerPanel.currentPanel.getHtmlContent(wsUrl);
+      // Disconnect old chat panel connection for fresh reconnect
+      ViewerPanel.chatPanel?.disconnect();
       return;
     }
 
@@ -117,8 +158,9 @@ export class ViewerPanel {
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
   <!-- DOMPurify -->
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
-  <!-- WebSocket URL 주입 -->
+  <!-- VS Code Webview flag + WebSocket URL 주입 -->
   <script nonce="${nonce}">
+    window.__VSCODE_WEBVIEW__ = true;
     window.__WS_URL__ = ${JSON.stringify(wsUrl)};
   </script>
 </head>
@@ -225,6 +267,10 @@ export class ViewerPanel {
 
   public dispose() {
     ViewerPanel.currentPanel = undefined;
+
+    // Disconnect chat panel
+    ViewerPanel.chatPanel?.disconnect();
+
     this.panel.dispose();
     while (this.disposables.length) {
       const d = this.disposables.pop();
