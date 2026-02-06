@@ -15,9 +15,10 @@ let debounceTimers: Map<number, NodeJS.Timeout> = new Map();
 let textDebounceTimer: NodeJS.Timeout | null = null;
 let lastFocusTime = 0;
 let lastCursorTime = 0;
+let cursorTrailingTimer: NodeJS.Timeout | null = null;
 let lastViewportTime = 0;
 let lastActiveCellIndex = -1;
-let lastCursorSource = '';
+let lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
@@ -97,11 +98,13 @@ function setupNewViewerHandler() {
         pollId: poll.pollId,
         question: poll.question,
         optionCount: poll.optionCount,
+        ...(poll.options ? { options: poll.options } : {}),
       });
       sendTo(ws, 'poll:results', {
         pollId: poll.pollId,
         votes: poll.votes,
         totalVoters: poll.totalVoters,
+        ...(poll.options ? { options: poll.options } : {}),
       });
     }
   });
@@ -132,6 +135,13 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
   currentNotebook = notebook;
   currentTextDocument = null;
   watchMode = 'notebook';
+
+  // 초기 활성 셀 인덱스 설정 (race condition 방지)
+  const editor = vscode.window.activeNotebookEditor;
+  if (editor && editor.selections.length > 0) {
+    lastActiveCellIndex = editor.selections[0].start;
+  }
+
   Logger.info(`Watching notebook: ${currentNotebook.uri.path}`);
 
   // 노트북 문서 변경 감지 (셀 내용 + 출력 + 구조)
@@ -144,19 +154,18 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       for (const change of event.cellChanges) {
         if (change.document) {
           const cellIndex = change.cell.index;
-          const newSource = change.document.getText();
+          // change.cell.document (live reference) 사용 — change.document가 snapshot일 수 있음
+          const newSource = change.cell.document.getText();
 
-          // debounce: 빠른 타이핑 시 마지막 변경만 전송
+          // ★ 핵심: cell:update를 즉시 전송 (debounce 없음)
+          // 이 핸들러가 소스 동기화의 유일한 메커니즘이다.
           const existing = debounceTimers.get(cellIndex);
           if (existing) clearTimeout(existing);
+          debounceTimers.delete(cellIndex);
 
-          debounceTimers.set(
-            cellIndex,
-            setTimeout(() => {
-              broadcast('cell:update', { index: cellIndex, source: newSource });
-              debounceTimers.delete(cellIndex);
-            }, CELL_DEBOUNCE_MS)
-          );
+          Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${newSource.length} first20="${newSource.substring(0, 20)}"`);
+          lastSentSources.set(cellIndex, newSource);
+          broadcast('cell:update', { index: cellIndex, source: newSource });
         }
 
         if (change.outputs) {
@@ -202,7 +211,9 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
               // Bounds check: 셀이 삭제된 경우 cellAt() 예외 방지
               if (idx >= 0 && idx < currentNotebook.cellCount) {
                 const pendingCell = currentNotebook.cellAt(idx);
-                broadcast('cell:update', { index: idx, source: pendingCell.document.getText() });
+                const pendingText = pendingCell.document.getText();
+                lastSentSources.set(idx, pendingText);
+                broadcast('cell:update', { index: idx, source: pendingText });
               }
               debounceTimers.delete(idx);
             }
@@ -234,36 +245,33 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       if (event.textEditor.document.uri.scheme !== 'vscode-notebook-cell') return;
       if (!currentNotebook) return;
 
-      // throttle: 50ms 간격으로만 전송
-      const now = Date.now();
-      if (now - lastCursorTime < CURSOR_THROTTLE_MS) return;
-      lastCursorTime = now;
-
-      // 셀 인덱스 추출 (URI fragment에서)
+      // 셀 인덱스 추출
       const cellUri = event.textEditor.document.uri;
       const cellIndex = getCellIndexFromUri(cellUri, currentNotebook);
       if (cellIndex === -1) return;
 
+      // 활성 셀만 처리 — background LSP/formatter가 비활성 셀에서 발생시키는
+      // selection 이벤트를 무시하여 커서 점프 방지
+      if (cellIndex !== lastActiveCellIndex) return;
+
       const selection = event.selections[0];
       if (!selection) return;
 
-      // 셀 내 총 라인 수와 현재 라인 비율 계산
       const totalLines = event.textEditor.document.lineCount;
       const currentLine = selection.active.line;
       const lineRatio = totalLines > 1 ? currentLine / (totalLines - 1) : 0;
 
-      // 소스가 변경된 경우에만 포함 (마지막 글자 동기화 보장)
-      const cellSource = event.textEditor.document.getText();
-      const sourceChanged = cellSource !== lastCursorSource;
-      if (sourceChanged) lastCursorSource = cellSource;
-
-      broadcast('cursor:position', {
+      // ★ 핵심 설계: cursor:position에는 절대로 source를 포함하지 않는다.
+      // 이유: onDidChangeTextEditorSelection은 document가 아직 업데이트되기 전에
+      // 발생할 수 있어서 document.getText()가 stale(이전) 내용을 반환한다.
+      // 이 stale source가 viewer에서 cell:update의 올바른 source를 덮어쓰는 버그 발생.
+      // 소스 동기화는 onDidChangeNotebookDocument → cell:update가 전담한다.
+      const payload = {
         cellIndex,
         line: currentLine,
         character: selection.active.character,
         totalLines,
         lineRatio: Math.min(1, Math.max(0, lineRatio)),
-        // 선택 영역도 전송 (드래그 선택 시)
         selectionStart: {
           line: selection.start.line,
           character: selection.start.character,
@@ -273,8 +281,44 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           character: selection.end.character,
         },
         hasSelection: !selection.isEmpty,
-        ...(sourceChanged ? { source: cellSource } : {}),
-      });
+      };
+
+      // ★ 백업 소스 동기화: IME 조합(한글 등) 중 onDidChangeNotebookDocument가
+      // 발생하지 않는 경우를 대비. setTimeout으로 document가 완전히 업데이트된 후
+      // 텍스트를 읽어 차이가 있으면 cell:update 전송.
+      // - 50ms 지연: setTimeout(0)은 document 업데이트 전에 실행될 수 있음
+      // - lastSent ?? '': 미등록 셀을 빈 문자열로 처리하여 false positive 방지
+      const capturedCellIndex = cellIndex;
+      setTimeout(() => {
+        if (!currentNotebook) return;
+        if (capturedCellIndex < 0 || capturedCellIndex >= currentNotebook.cellCount) return;
+        const cell = currentNotebook.cellAt(capturedCellIndex);
+        const currentText = cell.document.getText();
+        const lastSent = lastSentSources.get(capturedCellIndex) ?? '';
+        if (currentText !== lastSent) {
+          lastSentSources.set(capturedCellIndex, currentText);
+          Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
+          broadcast('cell:update', { index: capturedCellIndex, source: currentText });
+        }
+      }, 50);
+
+      // 커서 위치만 전송 → throttle 적용
+      const now = Date.now();
+      const timeSinceLast = now - lastCursorTime;
+
+      if (timeSinceLast < CURSOR_THROTTLE_MS) {
+        // Trailing edge: 마지막 커서 위치는 반드시 전송
+        if (cursorTrailingTimer) clearTimeout(cursorTrailingTimer);
+        cursorTrailingTimer = setTimeout(() => {
+          cursorTrailingTimer = null;
+          lastCursorTime = Date.now();
+          broadcast('cursor:position', payload);
+        }, CURSOR_THROTTLE_MS - timeSinceLast);
+        return;
+      }
+
+      lastCursorTime = now;
+      broadcast('cursor:position', payload);
     })
   );
 
@@ -413,6 +457,57 @@ function setupTextDocumentWatcher() {
 
   (viewportWatcher as any).__textDocWatcher = true;
   disposables.push(viewportWatcher);
+
+  // 텍스트 에디터 커서 위치 감지 (선생님 커서 공유)
+  const cursorWatcher = vscode.window.onDidChangeTextEditorSelection((event) => {
+    if (!currentTextDocument) return;
+    if (event.textEditor.document.uri.toString() !== currentTextDocument.uri.toString()) return;
+    if (event.textEditor.document.uri.scheme === 'vscode-notebook-cell') return;
+
+    const selection = event.selections[0];
+    if (!selection) return;
+
+    const totalLines = event.textEditor.document.lineCount;
+    const currentLine = selection.active.line;
+    const lineRatio = totalLines > 1 ? currentLine / (totalLines - 1) : 0;
+
+    const payload = {
+      mode: 'plaintext' as const,
+      line: currentLine,
+      character: selection.active.character,
+      totalLines,
+      lineRatio: Math.min(1, Math.max(0, lineRatio)),
+      selectionStart: {
+        line: selection.start.line,
+        character: selection.start.character,
+      },
+      selectionEnd: {
+        line: selection.end.line,
+        character: selection.end.character,
+      },
+      hasSelection: !selection.isEmpty,
+    };
+
+    // Leading + trailing edge throttle (lastCursorTime/cursorTrailingTimer 공유)
+    const now = Date.now();
+    const timeSinceLast = now - lastCursorTime;
+
+    if (timeSinceLast < CURSOR_THROTTLE_MS) {
+      if (cursorTrailingTimer) clearTimeout(cursorTrailingTimer);
+      cursorTrailingTimer = setTimeout(() => {
+        cursorTrailingTimer = null;
+        lastCursorTime = Date.now();
+        broadcast('cursor:position', payload);
+      }, CURSOR_THROTTLE_MS - timeSinceLast);
+      return;
+    }
+
+    lastCursorTime = now;
+    broadcast('cursor:position', payload);
+  });
+
+  (cursorWatcher as any).__textDocWatcher = true;
+  disposables.push(cursorWatcher);
 }
 
 /**
@@ -432,67 +527,64 @@ export function getCurrentContent(): { content: string; mode: 'notebook' | 'plai
 
       const outputs: any[] = [];
       for (const output of cell.outputs) {
-        const outputItems: any[] = [];
+        // 하나의 output에 여러 MIME item이 있을 수 있음 (예: text/html + text/plain)
+        // .ipynb 형식: 하나의 output.data에 여러 MIME key를 병합
+        let outputType: string | null = null;
+        const data: Record<string, any> = {};
+        let streamName: string | null = null;
+        let streamText: string[] = [];
+        let errorObj: any = null;
+
         for (const item of output.items) {
-          if (item.mime.startsWith('image/')) {
-            outputItems.push({
-              output_type: 'display_data',
-              data: { [item.mime]: Buffer.from(item.data).toString('base64') },
-              metadata: {},
-            });
-          } else if (item.mime === 'application/vnd.code.notebook.stdout') {
-            outputItems.push({
-              output_type: 'stream',
-              name: 'stdout',
-              text: new TextDecoder().decode(item.data).split('\n').map((line, idx, arr) =>
-                idx < arr.length - 1 ? line + '\n' : line
-              ),
-            });
+          const decoded = () => new TextDecoder().decode(item.data);
+          const toLines = (text: string) => text.split('\n').map((line, idx, arr) =>
+            idx < arr.length - 1 ? line + '\n' : line
+          );
+
+          if (item.mime === 'application/vnd.code.notebook.stdout') {
+            outputType = 'stream';
+            streamName = 'stdout';
+            streamText = toLines(decoded());
           } else if (item.mime === 'application/vnd.code.notebook.stderr') {
-            outputItems.push({
-              output_type: 'stream',
-              name: 'stderr',
-              text: new TextDecoder().decode(item.data).split('\n').map((line, idx, arr) =>
-                idx < arr.length - 1 ? line + '\n' : line
-              ),
-            });
+            outputType = 'stream';
+            streamName = 'stderr';
+            streamText = toLines(decoded());
           } else if (item.mime === 'application/vnd.code.notebook.error') {
+            outputType = 'error';
             try {
-              const errorData = JSON.parse(new TextDecoder().decode(item.data));
-              outputItems.push({
-                output_type: 'error',
-                ename: errorData.ename || '',
-                evalue: errorData.evalue || '',
-                traceback: errorData.traceback || [],
-              });
+              errorObj = JSON.parse(decoded());
             } catch {
-              outputItems.push({
-                output_type: 'stream',
-                name: 'stderr',
-                text: [new TextDecoder().decode(item.data)],
-              });
+              errorObj = { ename: 'Error', evalue: decoded(), traceback: [] };
             }
+          } else if (item.mime.startsWith('image/')) {
+            outputType = outputType || 'display_data';
+            data[item.mime] = Buffer.from(item.data).toString('base64');
           } else if (item.mime === 'text/html') {
-            outputItems.push({
-              output_type: 'execute_result',
-              data: {
-                'text/html': new TextDecoder().decode(item.data).split('\n').map((line, idx, arr) =>
-                  idx < arr.length - 1 ? line + '\n' : line
-                ),
-              },
-              metadata: {},
-              execution_count: cell.executionSummary?.executionOrder ?? null,
-            });
+            outputType = outputType || 'execute_result';
+            data['text/html'] = toLines(decoded());
           } else if (item.mime === 'text/plain') {
-            outputItems.push({
-              output_type: 'execute_result',
-              data: { 'text/plain': [new TextDecoder().decode(item.data)] },
-              metadata: {},
-              execution_count: cell.executionSummary?.executionOrder ?? null,
-            });
+            outputType = outputType || 'execute_result';
+            data['text/plain'] = [decoded()];
           }
         }
-        outputs.push(...outputItems);
+
+        if (outputType === 'stream' && streamName) {
+          outputs.push({ output_type: 'stream', name: streamName, text: streamText });
+        } else if (outputType === 'error' && errorObj) {
+          outputs.push({
+            output_type: 'error',
+            ename: errorObj.ename || '',
+            evalue: errorObj.evalue || '',
+            traceback: errorObj.traceback || [],
+          });
+        } else if (outputType && Object.keys(data).length > 0) {
+          outputs.push({
+            output_type: outputType,
+            data,
+            metadata: {},
+            execution_count: cell.executionSummary?.executionOrder ?? null,
+          });
+        }
       }
 
       const cellObj: any = {
@@ -552,20 +644,32 @@ export function stopWatching() {
   }
   disposables = [];
 
-  for (const timer of debounceTimers.values()) {
+  for (const [idx, timer] of debounceTimers.entries()) {
     clearTimeout(timer);
+    // Flush: send final cell state before stopping (prevent last character loss)
+    if (currentNotebook && idx >= 0 && idx < currentNotebook.cellCount) {
+      const cell = currentNotebook.cellAt(idx);
+      const text = cell.document.getText();
+      lastSentSources.set(idx, text);
+      broadcast('cell:update', { index: idx, source: text });
+    }
   }
   debounceTimers.clear();
+
+  if (cursorTrailingTimer) {
+    clearTimeout(cursorTrailingTimer);
+    cursorTrailingTimer = null;
+  }
 
   if (textDebounceTimer) {
     clearTimeout(textDebounceTimer);
     textDebounceTimer = null;
   }
 
+  lastSentSources.clear();
   currentNotebook = null;
   currentTextDocument = null;
   watchMode = null;
   lastActiveCellIndex = -1;
-  lastCursorSource = '';
   Logger.info('Stopped watching');
 }

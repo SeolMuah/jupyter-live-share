@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import { startHttpServer, stopHttpServer, getServer } from '../server/httpServer';
-import { startWsServer, stopWsServer, setSessionPin, setOnViewerCountChange } from '../server/wsServer';
+import { startWsServer, stopWsServer, setSessionPin, setOnViewerCountChange, setTeacherName } from '../server/wsServer';
 import { TunnelManager } from '../server/tunnel';
 import { startWatching, stopWatching } from '../notebook/watcher';
 import { StatusBarManager } from './statusBar';
 import { SessionViewProvider } from './sidebarView';
+import { ChatPanelProvider } from './chatPanelView';
 import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
 
@@ -24,7 +25,9 @@ export function forceStopTunnel(): void {
 export async function startSession(
   context: vscode.ExtensionContext,
   statusBar: StatusBarManager,
-  sidebarView?: SessionViewProvider
+  sidebarView?: SessionViewProvider,
+  chatPanel?: ChatPanelProvider,
+  teacherNameParam?: string
 ) {
   if (isRunning) {
     vscode.window.showWarningMessage('Jupyter Live Share session is already running.');
@@ -59,6 +62,7 @@ export async function startSession(
         // 2. WebSocket 서버 시작
         progress.report({ message: 'Starting WebSocket...' });
         if (pin) setSessionPin(pin);
+        if (teacherNameParam) setTeacherName(teacherNameParam);
         startWsServer(httpServer, config.maxViewers);
 
         // 접속자 수 변경 콜백
@@ -106,6 +110,10 @@ export async function startSession(
           fileName,
         });
 
+        // 채팅 패널 연결 & context key 설정
+        vscode.commands.executeCommand('setContext', 'jupyterLiveShare.sessionActive', true);
+        chatPanel?.connect(config.port);
+
         // URL 클립보드 복사
         await vscode.env.clipboard.writeText(tunnelUrl);
 
@@ -127,16 +135,17 @@ export async function startSession(
       `Failed to start session: ${err instanceof Error ? err.message : String(err)}`
     );
     // 정리
-    await cleanupSession(statusBar, sidebarView);
+    await cleanupSession(statusBar, sidebarView, chatPanel);
   }
 }
 
 export async function stopSession(
   statusBar: StatusBarManager,
-  sidebarView?: SessionViewProvider
+  sidebarView?: SessionViewProvider,
+  chatPanel?: ChatPanelProvider
 ) {
   if (!isRunning) return;
-  await cleanupSession(statusBar, sidebarView);
+  await cleanupSession(statusBar, sidebarView, chatPanel);
   vscode.window.showInformationMessage('Jupyter Live Share session stopped.');
 }
 
@@ -224,9 +233,14 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
 
 async function cleanupSession(
   statusBar: StatusBarManager,
-  sidebarView?: SessionViewProvider
+  sidebarView?: SessionViewProvider,
+  chatPanel?: ChatPanelProvider
 ) {
   isRunning = false;
+
+  // 채팅 패널 해제 & context key 해제
+  chatPanel?.disconnect();
+  vscode.commands.executeCommand('setContext', 'jupyterLiveShare.sessionActive', false);
 
   stopWatching();
 

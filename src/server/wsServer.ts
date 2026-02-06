@@ -20,6 +20,7 @@ interface PollState {
   pollId: string;
   question: string;
   optionCount: number;
+  options: string[] | null; // null = number mode, string[] = text label mode
   votes: number[];
   voterChoices: Map<WebSocket, number>;
 }
@@ -29,6 +30,7 @@ export interface PollStateReadonly {
   pollId: string;
   question: string;
   optionCount: number;
+  options: readonly string[] | null;
   votes: readonly number[];
   totalVoters: number;
 }
@@ -37,6 +39,7 @@ let wss: WebSocket.Server | null = null;
 let viewerCount = 0;
 let onViewerCountChange: ((count: number) => void) | null = null;
 let sessionPin: string | null = null;
+let teacherName: string = 'Teacher';
 let clientMeta: Map<WebSocket, ClientMeta> = new Map();
 let currentPoll: PollState | null = null;
 let chatMessageId = 0;
@@ -49,6 +52,10 @@ const MAX_MESSAGE_LENGTH = 500;
 
 export function setSessionPin(pin: string | null) {
   sessionPin = pin;
+}
+
+export function setTeacherName(name: string) {
+  teacherName = name || 'Teacher';
 }
 
 export function setOnViewerCountChange(callback: (count: number) => void) {
@@ -66,6 +73,7 @@ export function getCurrentPollState(): PollStateReadonly | null {
     pollId: currentPoll.pollId,
     question: currentPoll.question,
     optionCount: currentPoll.optionCount,
+    options: currentPoll.options ? [...currentPoll.options] : null, // cloned or null
     votes: [...currentPoll.votes], // cloned array
     totalVoters: currentPoll.voterChoices.size, // only the count, not the Map
   };
@@ -99,25 +107,30 @@ function checkRateLimit(meta: ClientMeta): string | null {
   return null;
 }
 
-export function startPoll(question: string, optionCount: number, pollId: string): void {
+export function startPoll(question: string, optionCount: number, pollId: string, options?: string[]): void {
+  const opts = options && options.length === optionCount ? options : null;
   currentPoll = {
     pollId,
     question,
     optionCount,
+    options: opts,
     votes: new Array(optionCount).fill(0),
     voterChoices: new Map(),
   };
-  broadcast('poll:start', { pollId, question, optionCount });
+  broadcast('poll:start', { pollId, question, optionCount, ...(opts ? { options: opts } : {}) });
   Logger.info(`Poll started: "${question}" with ${optionCount} options`);
 }
 
-export function endPoll(): { pollId: string; finalVotes: number[]; totalVoters: number } | null {
+export function endPoll(): { pollId: string; finalVotes: number[]; totalVoters: number; options?: string[] } | null {
   if (!currentPoll) return null;
-  const result = {
+  const result: { pollId: string; finalVotes: number[]; totalVoters: number; options?: string[] } = {
     pollId: currentPoll.pollId,
     finalVotes: [...currentPoll.votes],
     totalVoters: currentPoll.voterChoices.size,
   };
+  if (currentPoll.options) {
+    result.options = currentPoll.options;
+  }
   broadcast('poll:end', result);
   Logger.info(`Poll ended: "${currentPoll.question}"`);
   currentPoll = null;
@@ -138,7 +151,7 @@ export function startWsServer(
       authenticated: !sessionPin,
       isTeacher,
       isTeacherPanel: false,
-      nickname: isTeacher ? 'Teacher' : null,
+      nickname: isTeacher ? teacherName : null,
       lastMessageTimes: [],
       countedAsViewer: false,
     };
@@ -155,7 +168,7 @@ export function startWsServer(
           if (joinData.teacherPanel && meta.isTeacher) {
             meta.authenticated = true;
             meta.isTeacherPanel = true;
-            meta.nickname = 'Teacher';
+            meta.nickname = teacherName;
             sendTo(ws, 'join:result', { success: true });
             // Send current viewer count
             sendTo(ws, 'viewers:count', { count: viewerCount });
@@ -165,11 +178,13 @@ export function startWsServer(
                 pollId: currentPoll.pollId,
                 question: currentPoll.question,
                 optionCount: currentPoll.optionCount,
+                ...(currentPoll.options ? { options: currentPoll.options } : {}),
               });
               sendTo(ws, 'poll:results', {
                 pollId: currentPoll.pollId,
                 votes: [...currentPoll.votes],
                 totalVoters: currentPoll.voterChoices.size,
+                ...(currentPoll.options ? { options: currentPoll.options } : {}),
               });
             }
             // Don't increment viewerCount or broadcast viewers:count
@@ -256,12 +271,14 @@ export function startWsServer(
 
         if (msg.type === 'poll:start') {
           if (!meta.isTeacher) return; // Only teacher
-          const pollData = msg.data as { question: string; optionCount: number; pollId: string };
+          const pollData = msg.data as { question: string; optionCount: number; pollId: string; options?: string[] };
           const question = (pollData.question || '').trim();
           if (!question) return; // Reject empty question
-          const optionCount = Math.min(Math.max(pollData.optionCount || 2, 2), 5);
+          const optionCount = Math.min(Math.max(pollData.optionCount || 2, 2), 10);
           const pollId = pollData.pollId || Date.now().toString();
-          startPoll(question, optionCount, pollId);
+          // Sanitize options
+          const options = pollData.options?.map(o => (o || '').trim().slice(0, 100));
+          startPoll(question, optionCount, pollId, options);
           return;
         }
 
@@ -283,6 +300,7 @@ export function startWsServer(
             pollId: currentPoll.pollId,
             votes: [...currentPoll.votes],
             totalVoters: currentPoll.voterChoices.size,
+            ...(currentPoll.options ? { options: currentPoll.options } : {}),
           });
           return;
         }
@@ -346,6 +364,7 @@ export function stopWsServer(): Promise<void> {
   return new Promise((resolve) => {
     viewerCount = 0;
     sessionPin = null;
+    teacherName = 'Teacher';
     clientMeta.clear();
     currentPoll = null;
     chatMessageId = 0;
@@ -380,6 +399,7 @@ export function stopWsServer(): Promise<void> {
 export function forceStopWsServer(): void {
   viewerCount = 0;
   sessionPin = null;
+  teacherName = 'Teacher';
   clientMeta.clear();
   currentPoll = null;
   chatMessageId = 0;

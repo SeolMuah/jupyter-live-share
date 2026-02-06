@@ -204,7 +204,7 @@ header {
   margin-bottom: 8px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  overflow: hidden;
+  overflow: visible;
   transition: border-color 0.3s, background-color 0.3s;
 }
 
@@ -251,9 +251,18 @@ header {
   padding: 0 !important;
 }
 
-/* hljs 테마 배경색 제거 (셀 배경 사용) */
-.cell-source code.hljs {
+/* hljs CDN 테마(vs.min.css)의 pre code.hljs 규칙 완전 오버라이드
+   원본: pre code.hljs { display:block; overflow-x:auto; padding:1em }
+   code.hljs { padding:3px 5px }  .hljs { background:#fff }
+   이 규칙들이 셀 레이아웃을 깨뜨리지 않도록 명시적으로 재설정 */
+.cell-source code.hljs,
+.cell-source pre code.hljs,
+.document-content code.hljs,
+.document-content pre code.hljs {
   background: transparent !important;
+  padding: 0 !important;
+  margin: 0;
+  overflow-x: visible;
 }
 
 /* === Highlight.js Fallback Styles (VS Code Webview CDN 대체) === */
@@ -720,6 +729,7 @@ footer label {
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.6;
+  color: var(--text-primary);
   background: none !important;
   padding: 0 !important;
 }
@@ -792,6 +802,14 @@ footer label {
   font-size: 0.82rem;
   color: var(--accent);
   flex-shrink: 0;
+}
+
+.chat-nickname.teacher {
+  color: #2ea043;
+}
+
+[data-theme="dark"] .chat-nickname.teacher {
+  color: #3fb950;
 }
 
 .chat-time {
@@ -1144,45 +1162,36 @@ footer label {
 /* === Teacher Cursor === */
 .teacher-cursor {
   position: absolute;
-  width: 3px;
+  width: 2px;
   /* height는 JS에서 동적으로 설정 */
-  background: #2563eb;
+  background: #3b82f6;
   border-radius: 1px;
-  animation: cursor-blink 0.8s ease-in-out infinite;
+  animation: cursor-blink 1.2s ease-in-out infinite;
   z-index: 100;
-  box-shadow: 0 0 8px rgba(37, 99, 235, 0.8), 0 0 16px rgba(37, 99, 235, 0.4);
   pointer-events: none;
-}
-
-.teacher-cursor::before {
-  content: '▼';
-  position: absolute;
-  top: -18px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 14px;
-  color: #2563eb;
-  text-shadow: 0 0 4px rgba(37, 99, 235, 0.8);
 }
 
 .teacher-cursor::after {
   content: '선생님';
   position: absolute;
-  top: -18px;
-  left: 10px;
-  font-size: 11px;
+  bottom: 100%;
+  left: -1px;
+  font-size: 9px;
   color: #fff;
-  background: #2563eb;
-  padding: 1px 6px;
-  border-radius: 3px;
+  background: #3b82f6;
+  padding: 0 5px;
+  border-radius: 3px 3px 3px 0;
   white-space: nowrap;
   font-family: var(--font-sans);
   font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.02em;
 }
 
 @keyframes cursor-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%, 40% { opacity: 1; }
+  50%, 90% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 .teacher-line-highlight {
@@ -1190,8 +1199,7 @@ footer label {
   left: 0;
   right: 0;
   /* height는 JS에서 동적으로 설정 */
-  background: rgba(37, 99, 235, 0.12);
-  border-left: 3px solid #2563eb;
+  background: rgba(59, 130, 246, 0.07);
   pointer-events: none;
   z-index: 50;
 }
@@ -1208,41 +1216,36 @@ footer label {
 /* Dark mode adjustments */
 [data-theme="dark"] .teacher-cursor {
   background: #60a5fa;
-  box-shadow: 0 0 10px rgba(96, 165, 250, 0.9), 0 0 20px rgba(96, 165, 250, 0.5);
-}
-
-[data-theme="dark"] .teacher-cursor::before {
-  color: #60a5fa;
 }
 
 [data-theme="dark"] .teacher-cursor::after {
   background: #60a5fa;
+  color: #0f172a;
 }
 
 [data-theme="dark"] .teacher-line-highlight {
-  background: rgba(96, 165, 250, 0.15);
-  border-left-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
 }
 
 [data-theme="dark"] .teacher-selection {
   background: rgba(255, 213, 0, 0.3);
 }
 
-/* 마크다운 셀 편집 중 하이라이트 (정확한 커서 위치 대신 셀 전체 강조) */
+/* 마크다운 셀 편집 중 하이라이트 */
 .cell.teacher-editing {
-  background: rgba(37, 99, 235, 0.08);
-  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.4);
-  animation: editing-pulse 1.5s ease-in-out infinite;
+  background: rgba(59, 130, 246, 0.04);
+  box-shadow: inset 0 0 0 1.5px rgba(59, 130, 246, 0.3);
+  animation: editing-pulse 2s ease-in-out infinite;
 }
 
 @keyframes editing-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.4); }
-  50% { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.7); }
+  0%, 100% { box-shadow: inset 0 0 0 1.5px rgba(59, 130, 246, 0.3); }
+  50% { box-shadow: inset 0 0 0 1.5px rgba(59, 130, 246, 0.5); }
 }
 
 [data-theme="dark"] .cell.teacher-editing {
-  background: rgba(96, 165, 250, 0.1);
-  box-shadow: inset 0 0 0 2px rgba(96, 165, 250, 0.4);
+  background: rgba(96, 165, 250, 0.06);
+  box-shadow: inset 0 0 0 1.5px rgba(96, 165, 250, 0.3);
 }
 
 /* 마크다운 셀 raw source 모드 (선생님 커서 표시 시) */
@@ -1255,7 +1258,6 @@ footer label {
   padding: 12px 16px;
   background: var(--bg-code);
   overflow-x: auto;
-  border-left: 3px solid #2563eb;
 }
 
 .markup-raw-source code {

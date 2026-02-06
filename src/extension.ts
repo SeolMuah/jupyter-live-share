@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { startSession, stopSession, createPoll, endPollCommand } from './ui/commands';
 import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
+import { ChatPanelProvider } from './ui/chatPanelView';
 import { ViewerPanel } from './ui/viewerPanel';
 import { Logger } from './utils/logger';
 import { forceStopHttpServer } from './server/httpServer';
@@ -10,6 +11,7 @@ import { forceStopTunnel } from './ui/commands';
 
 let statusBarManager: StatusBarManager | undefined;
 let sessionViewProvider: SessionViewProvider | undefined;
+let chatPanelProvider: ChatPanelProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   Logger.init();
@@ -36,14 +38,32 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  // Chat Panel in bottom panel (terminal area)
+  chatPanelProvider = new ChatPanelProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      ChatPanelProvider.viewType,
+      chatPanelProvider,
+      {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+      }
+    )
+  );
+
   // Handle messages from sidebar webview
   sessionViewProvider.setOnCommand((command, data) => {
     switch (command) {
-      case 'startSession':
-        startSession(context, statusBarManager!, sessionViewProvider);
+      case 'startSession': {
+        const teacherName = (data && typeof data === 'object' && 'teacherName' in data)
+          ? String((data as { teacherName: string }).teacherName)
+          : undefined;
+        startSession(context, statusBarManager!, sessionViewProvider, chatPanelProvider, teacherName);
         break;
+      }
       case 'stopSession':
-        stopSession(statusBarManager!, sessionViewProvider);
+        stopSession(statusBarManager!, sessionViewProvider, chatPanelProvider);
         break;
       case 'copyUrl':
         if (data && typeof data === 'object' && 'url' in data) {
@@ -60,13 +80,13 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('Extension not properly initialized');
         return;
       }
-      startSession(context, statusBarManager, sessionViewProvider);
+      startSession(context, statusBarManager, sessionViewProvider, chatPanelProvider);
     })
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('jupyterLiveShare.stopSession', () => {
       if (!statusBarManager) return;
-      stopSession(statusBarManager, sessionViewProvider);
+      stopSession(statusBarManager, sessionViewProvider, chatPanelProvider);
     })
   );
 
@@ -92,7 +112,7 @@ export function deactivate() {
   // 정상 종료 시도
   try {
     if (statusBarManager) {
-      stopSession(statusBarManager, sessionViewProvider);
+      stopSession(statusBarManager, sessionViewProvider, chatPanelProvider);
     }
   } catch {
     // 정상 종료 실패 시 강제 정리

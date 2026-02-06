@@ -247,7 +247,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-textLink-foreground);
     }
     .chat-nickname.teacher {
-      color: var(--vscode-errorForeground);
+      color: #2ea043;
     }
     .chat-time {
       font-size: 10px;
@@ -402,6 +402,11 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
   <!-- Not running state -->
   <div class="not-running" id="notRunning">
     <p>No active session</p>
+    <div style="width:100%; margin-bottom:8px;">
+      <label style="display:block; font-size:11px; color:var(--vscode-descriptionForeground); margin-bottom:2px;">Display Name</label>
+      <input type="text" id="teacherName" value="Teacher" maxlength="30"
+        style="width:100%; padding:5px 8px; font-size:12px; background:var(--vscode-input-background); color:var(--vscode-input-foreground); border:1px solid var(--vscode-input-border,var(--vscode-widget-border,transparent)); border-radius:3px; font-family:var(--vscode-font-family);" />
+    </div>
     <button class="btn-primary" id="btnStart">Start Session</button>
   </div>
 
@@ -432,13 +437,25 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       <div class="poll-form" id="pollForm">
         <label>Question</label>
         <input type="text" id="pollQuestion" placeholder="e.g. How well do you understand?" />
-        <label>Options count</label>
-        <select id="pollOptionCount">
-          <option value="2">2</option>
-          <option value="3">3</option>
-          <option value="4">4</option>
-          <option value="5">5</option>
+        <label>Mode</label>
+        <select id="pollMode">
+          <option value="number">Number (1, 2, 3...)</option>
+          <option value="text">Text (custom labels)</option>
         </select>
+        <div id="pollNumberMode">
+          <label>Options count</label>
+          <select id="pollOptionCount">
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+        <div id="pollTextMode" style="display:none;">
+          <label>Options (one per line)</label>
+          <textarea id="pollTextOptions" rows="4" placeholder="Yes&#10;No&#10;Maybe"
+            style="width:100%;padding:4px 6px;font-size:12px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:3px;font-family:var(--vscode-font-family);resize:vertical;"></textarea>
+        </div>
         <div class="poll-form-actions">
           <button class="btn-secondary" id="btnPollCancel">Cancel</button>
           <button class="btn-primary" id="btnPollStart">Start</button>
@@ -483,6 +500,10 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       const pollActiveBar = document.getElementById('pollActiveBar');
       const pollActiveQuestion = document.getElementById('pollActiveQuestion');
       const pollResultsMini = document.getElementById('pollResultsMini');
+      const pollMode = document.getElementById('pollMode');
+      const pollNumberMode = document.getElementById('pollNumberMode');
+      const pollTextMode = document.getElementById('pollTextMode');
+      const pollTextOptions = document.getElementById('pollTextOptions');
       const infoUrl = document.getElementById('infoUrl');
       const infoFile = document.getElementById('infoFile');
       const infoViewers = document.getElementById('infoViewers');
@@ -490,10 +511,12 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       const chatInput = document.getElementById('chatInput');
       const btnSend = document.getElementById('btnSend');
       const copiedToast = document.getElementById('copiedToast');
+      const teacherNameInput = document.getElementById('teacherName');
 
       let ws = null;
       let currentState = { isRunning: false, viewerCount: 0 };
       let pollActive = false;
+      let currentPollOptions = null; // text labels for current poll
       const MAX_CHAT_MESSAGES = 200;
 
       // Notify extension that webview is ready
@@ -501,7 +524,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       // Button handlers
       btnStart.addEventListener('click', () => {
-        vscode.postMessage({ type: 'command', command: 'startSession' });
+        const tName = (teacherNameInput.value || '').trim() || 'Teacher';
+        vscode.postMessage({ type: 'command', command: 'startSession', data: { teacherName: tName } });
       });
 
       btnStop.addEventListener('click', () => {
@@ -517,9 +541,24 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         }
       });
 
+      // Poll mode toggle
+      pollMode.addEventListener('change', () => {
+        if (pollMode.value === 'text') {
+          pollNumberMode.style.display = 'none';
+          pollTextMode.style.display = '';
+        } else {
+          pollNumberMode.style.display = '';
+          pollTextMode.style.display = 'none';
+        }
+      });
+
       btnPollCancel.addEventListener('click', () => {
         pollForm.classList.remove('visible');
         pollQuestion.value = '';
+        pollTextOptions.value = '';
+        pollMode.value = 'number';
+        pollNumberMode.style.display = '';
+        pollTextMode.style.display = 'none';
       });
 
       btnPollStart.addEventListener('click', () => {
@@ -529,14 +568,27 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
           addSystemMessage('WebSocket not connected. Cannot create poll.');
           return;
         }
-        const optionCount = parseInt(pollOptionCount.value);
         const pollId = Date.now().toString();
-        ws.send(JSON.stringify({
-          type: 'poll:start',
-          data: { question, optionCount, pollId }
-        }));
+        let pollData;
+
+        if (pollMode.value === 'text') {
+          const lines = pollTextOptions.value.split('\\n').map(l => l.trim()).filter(l => l);
+          if (lines.length < 2) {
+            addSystemMessage('Please enter at least 2 options.');
+            return;
+          }
+          pollData = { question, optionCount: lines.length, options: lines, pollId };
+        } else {
+          pollData = { question, optionCount: parseInt(pollOptionCount.value), pollId };
+        }
+
+        ws.send(JSON.stringify({ type: 'poll:start', data: pollData }));
         pollForm.classList.remove('visible');
         pollQuestion.value = '';
+        pollTextOptions.value = '';
+        pollMode.value = 'number';
+        pollNumberMode.style.display = '';
+        pollTextMode.style.display = 'none';
       });
 
       btnEndPoll.addEventListener('click', () => {
@@ -717,6 +769,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       function showPollActive(data) {
         pollActive = true;
+        currentPollOptions = data.options || null;
         btnPoll.textContent = 'Poll Active';
         btnPoll.disabled = true;
         pollActiveQuestion.textContent = data.question;
@@ -753,7 +806,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       function updatePollResults(data) {
         const total = data.totalVoters || 0;
         const votes = data.votes || [];
-        const parts = votes.map((v, i) => (i+1) + ': ' + v).join('  ');
+        const opts = data.options || currentPollOptions;
+        const parts = votes.map((v, i) => ((opts && opts[i]) || (i+1)) + ': ' + v).join('  ');
         pollResultsMini.textContent = 'Total: ' + total + '  |  ' + parts;
 
         // Update chat poll card results
@@ -761,12 +815,12 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         if (card) {
           const resultsEl = card.querySelector('.chat-poll-results');
           const statusEl = card.querySelector('.chat-poll-status');
-          if (resultsEl) renderPollBars(resultsEl, votes, total);
+          if (resultsEl) renderPollBars(resultsEl, votes, total, opts);
           if (statusEl) statusEl.textContent = total + '\uBA85 \uD22C\uD45C';
         }
       }
 
-      function renderPollBars(container, votes, totalVoters) {
+      function renderPollBars(container, votes, totalVoters, options) {
         container.innerHTML = '';
         for (let i = 0; i < votes.length; i++) {
           const row = document.createElement('div');
@@ -774,7 +828,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
           const label = document.createElement('span');
           label.className = 'poll-bar-label';
-          label.textContent = (i + 1).toString();
+          label.textContent = (options && options[i]) ? options[i] : (i + 1).toString();
+          if (options && options[i]) label.style.minWidth = 'auto';
 
           const track = document.createElement('div');
           track.className = 'poll-bar-track';
@@ -808,13 +863,15 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
           const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
           if (card && data.finalVotes) {
             const total = data.totalVoters || 0;
+            const opts = data.options || currentPollOptions;
             const resultsEl = card.querySelector('.chat-poll-results');
             const statusEl = card.querySelector('.chat-poll-status');
-            if (resultsEl) renderPollBars(resultsEl, data.finalVotes, total);
+            if (resultsEl) renderPollBars(resultsEl, data.finalVotes, total, opts);
             if (statusEl) statusEl.textContent = '\uD22C\uD45C \uC885\uB8CC \u2014 \uCD1D ' + total + '\uBA85';
             card.classList.add('ended');
           }
         }
+        currentPollOptions = null;
       }
 
       // State updates from extension

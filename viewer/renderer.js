@@ -10,9 +10,66 @@ const Renderer = (() => {
   function debouncedHighlight(key, element) {
     if (highlightTimers[key]) clearTimeout(highlightTimers[key]);
     highlightTimers[key] = setTimeout(() => {
+      // Detach cursor overlays before highlighting (hljs.highlightElement replaces innerHTML)
+      const overlays = [];
+      element.querySelectorAll('.teacher-cursor, .teacher-line-highlight, .teacher-selection, .teacher-selection-container').forEach(el => {
+        overlays.push(el);
+        el.remove();
+      });
+
       hljs.highlightElement(element);
+
+      // Re-attach cursor overlays
+      for (const el of overlays) {
+        element.appendChild(el);
+      }
       delete highlightTimers[key];
     }, HIGHLIGHT_DEBOUNCE_MS);
+  }
+
+  const LARGE_CELL_LINE_THRESHOLD = 200;
+
+  /**
+   * Atomic highlight update: hljs.highlight() + innerHTML in one shot.
+   * Prevents flicker from textContent destroying hljs spans then re-highlighting later.
+   * Preserves cursor overlay elements that are children of codeEl.
+   */
+  function highlightedUpdate(codeEl, source, language) {
+    // Detach cursor overlays (they are children of codeEl)
+    const overlays = [];
+    codeEl.querySelectorAll('.teacher-cursor, .teacher-line-highlight, .teacher-selection, .teacher-selection-container').forEach(el => {
+      overlays.push(el);
+      el.remove();
+    });
+
+    const lineCount = (source || '').split('\n').length;
+
+    if (language && language !== 'plaintext' && lineCount <= LARGE_CELL_LINE_THRESHOLD) {
+      try {
+        const result = hljs.highlight(source || '', { language });
+        codeEl.innerHTML = result.value;
+      } catch (e) {
+        codeEl.textContent = source || '';
+      }
+    } else {
+      codeEl.textContent = source || '';
+      if (language && language !== 'plaintext') {
+        const parentId = codeEl.closest('[id]')?.id || 'unknown';
+        debouncedHighlight(`fallback-${parentId}-${language}`, codeEl);
+      }
+    }
+
+    // Re-attach cursor overlays
+    for (const el of overlays) {
+      codeEl.appendChild(el);
+    }
+  }
+
+  function detectLanguage(codeEl) {
+    for (const cls of codeEl.className.split(/\s+/)) {
+      if (cls.startsWith('language-')) return cls.slice(9);
+    }
+    return null;
   }
 
   /**
@@ -54,26 +111,53 @@ const Renderer = (() => {
    * Uses marked tokens to track source line positions
    */
   function renderMarkdownWithLineNumbers(tokens, sourceText) {
-    let currentLine = 0;
+    // 소스 텍스트에서 각 토큰의 raw를 순차 매칭하여 정확한 라인 위치 추적
+    let searchOffset = 0;
     let html = '';
 
+    // 소스를 줄 단위로 분할하여 offset→line 변환용
+    const lineBreaks = [0]; // lineBreaks[i] = i번째 줄의 시작 문자 offset
+    for (let i = 0; i < (sourceText || '').length; i++) {
+      if (sourceText[i] === '\n') lineBreaks.push(i + 1);
+    }
+    function offsetToLine(offset) {
+      // 이진 탐색: offset이 속한 줄 번호 반환
+      let lo = 0, hi = lineBreaks.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (lineBreaks[mid] <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    }
+
     for (const token of tokens) {
-      // 토큰의 raw text로 현재 라인 위치 추적
       const tokenText = token.raw || '';
-      const startLine = currentLine;
+
+      // 소스에서 토큰의 시작 위치를 찾아 정확한 라인 번호 계산
+      let startLine;
+      if (sourceText && tokenText) {
+        const idx = sourceText.indexOf(tokenText, searchOffset);
+        if (idx !== -1) {
+          startLine = offsetToLine(idx);
+          searchOffset = idx + tokenText.length;
+        } else {
+          startLine = offsetToLine(searchOffset);
+        }
+      } else {
+        startLine = offsetToLine(searchOffset);
+      }
 
       // 블록 레벨 요소에 data-line 속성 추가
       if (token.type !== 'space') {
-        // 토큰을 개별적으로 렌더링하고 첫 번째 요소에 data-line 추가
-        const tokenHtml = marked.parser([token]);
-        // 첫 번째 태그에 data-line 삽입
-        const modifiedHtml = tokenHtml.replace(/^<(\w+)/, `<$1 data-line="${startLine}"`);
-        html += modifiedHtml;
+        try {
+          const tokenHtml = marked.parser([token]);
+          const modifiedHtml = tokenHtml.replace(/^<(\w+)/, `<$1 data-line="${startLine}"`);
+          html += modifiedHtml;
+        } catch (e) {
+          // malformed token — skip
+        }
       }
-
-      // 토큰이 차지하는 라인 수 계산
-      const tokenLines = tokenText.split('\n').length - 1;
-      currentLine += Math.max(1, tokenLines);
     }
 
     return html;
@@ -89,6 +173,7 @@ const Renderer = (() => {
     cursorElement = null;
     selectionElement = null;
     currentCursorCellIndex = -1;
+    documentCursorActive = false;
     // Clear stale highlight timers (DOM elements are about to be destroyed)
     for (const key of Object.keys(highlightTimers)) {
       clearTimeout(highlightTimers[key]);
@@ -139,8 +224,6 @@ const Renderer = (() => {
 
     const wrapper = document.createElement('div');
     wrapper.className = 'cell-markup-wrapper';
-    // 원본 소스 저장 (커서 표시 시 사용)
-    wrapper.dataset.source = cell.source || '';
 
     const content = document.createElement('div');
     content.className = 'cell-markup';
@@ -177,12 +260,12 @@ const Renderer = (() => {
 
     wrapper.appendChild(content);
 
-    // Copy button for markdown cell (copies raw markdown source)
-    // Store source in data attribute for updates
+    // 원본 소스 저장 (커서 표시 + Copy 버튼에서 사용)
+    wrapper.dataset.source = cell.source || '';
+
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
     copyBtn.textContent = 'Copy';
-    wrapper.dataset.source = cell.source || '';
     copyBtn.addEventListener('click', () => {
       const source = wrapper.dataset.source || '';
       copyToClipboard(source, copyBtn);
@@ -396,13 +479,14 @@ const Renderer = (() => {
    */
   function updateCellSource(index, source) {
     const cellEl = document.getElementById(`cell-${index}`);
-    if (!cellEl) return;
+    if (!cellEl) {
+      console.error('[JLS] updateCellSource FAIL — DOM cell-' + index + ' not found');
+      return;
+    }
 
     const codeEl = cellEl.querySelector('.cell-source code');
     if (codeEl) {
-      // 텍스트 즉시 반영, 하이라이팅은 디바운스
-      codeEl.textContent = source;
-      debouncedHighlight(`cell-${index}`, codeEl);
+      highlightedUpdate(codeEl, source, detectLanguage(codeEl));
     }
 
     // Markup cell - Markdown 렌더링은 디바운스 (라인 번호 매핑 포함)
@@ -417,8 +501,7 @@ const Renderer = (() => {
       // Raw source 모드 활성 시 즉시 텍스트 업데이트 (마지막 글자 누락 방지)
       const rawSourceCode = cellEl.querySelector('.markup-raw-source code');
       if (rawSourceCode) {
-        rawSourceCode.textContent = source || '';
-        debouncedHighlight(`raw-${index}`, rawSourceCode);
+        highlightedUpdate(rawSourceCode, source || '', 'markdown');
       }
 
       const key = `markup-${index}`;
@@ -468,10 +551,14 @@ const Renderer = (() => {
     if (cellEl) {
       cellEl.classList.add('active');
 
-      // Auto-scroll이 켜져 있으면 셀이 보이도록 스크롤
+      // Auto-scroll이 켜져 있으면 셀을 화면 상단으로 스크롤
       const autoScroll = document.getElementById('auto-scroll');
       if (autoScroll && autoScroll.checked) {
-        scrollToCellElement(cellEl);
+        const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+        window.scrollTo({
+          top: Math.max(0, cellEl.offsetTop - headerHeight - 8),
+          behavior: 'auto'
+        });
       }
     }
   }
@@ -485,6 +572,7 @@ const Renderer = (() => {
     if (!contentEl) return;
 
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const margin = 60;
     const markupEl = contentEl.querySelector('.cell-markup');
 
     if (markupEl) {
@@ -501,9 +589,14 @@ const Renderer = (() => {
       }
 
       if (targetEl) {
-        const targetTop = targetEl.getBoundingClientRect().top + window.scrollY;
+        const rect = targetEl.getBoundingClientRect();
+        // 이미 뷰포트 안에 보이면 스크롤 불필요
+        if (rect.top >= headerHeight + margin && rect.bottom <= window.innerHeight - margin) {
+          return;
+        }
+        const absoluteTop = rect.top + window.scrollY;
         window.scrollTo({
-          top: Math.max(0, targetTop - headerHeight - 8),
+          top: Math.max(0, absoluteTop - headerHeight - (window.innerHeight / 3)),
           behavior: 'auto'
         });
         return;
@@ -514,10 +607,16 @@ const Renderer = (() => {
     if (codeEl) {
       const lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 24;
       const codeTop = codeEl.getBoundingClientRect().top + window.scrollY;
-      const scrollTarget = codeTop + (lineNumber * lineHeight) - headerHeight - 8;
+      const targetAbsoluteTop = codeTop + (lineNumber * lineHeight);
+
+      // 이미 뷰포트 안에 보이면 스크롤 불필요
+      const targetViewportTop = targetAbsoluteTop - window.scrollY;
+      if (targetViewportTop >= headerHeight + margin && targetViewportTop <= window.innerHeight - margin) {
+        return;
+      }
 
       window.scrollTo({
-        top: Math.max(0, scrollTarget),
+        top: Math.max(0, targetAbsoluteTop - headerHeight - (window.innerHeight / 3)),
         behavior: 'auto'
       });
     }
@@ -587,6 +686,7 @@ const Renderer = (() => {
    * Render a plaintext document
    */
   function renderPlaintextDocument(data, container) {
+    resetCursorState();
     container.innerHTML = '';
 
     const wrapper = document.createElement('div');
@@ -647,7 +747,7 @@ const Renderer = (() => {
       const tokens = marked.lexer(content || '');
       const html = renderMarkdownWithLineNumbers(tokens, content || '');
       mdEl.innerHTML = DOMPurify.sanitize(html, {
-        ADD_ATTR: ['data-line'],
+        ADD_ATTR: ['data-line', 'class', 'style'],
       });
 
       // 코드 블록 하이라이팅
@@ -717,15 +817,19 @@ const Renderer = (() => {
         delete highlightTimers[key];
       }, HIGHLIGHT_DEBOUNCE_MS);
     } else {
-      // 코드/텍스트: textContent 즉시 반영, 하이라이팅만 디바운스
+      // 코드/텍스트: atomic highlight update (flicker 방지)
       const codeEl = contentEl.querySelector('code');
       if (codeEl) {
-        codeEl.textContent = content || '';
-        const hljsLang = getHljsLanguage(languageId);
+        let hljsLang = getHljsLanguage(languageId);
+        // badge label에서 languageId를 유추하지 못한 경우 (getLangIdFromLabel 매핑 누락),
+        // code 요소의 className에서 language를 읽는다
+        if (!hljsLang) {
+          hljsLang = detectLanguage(codeEl);
+        }
         if (hljsLang) {
           codeEl.className = `language-${hljsLang}`;
-          debouncedHighlight('doc-code', codeEl);
         }
+        highlightedUpdate(codeEl, content || '', hljsLang);
       } else {
         // code 요소가 없으면 전체 재렌더
         renderDocumentContent(content, languageId, contentEl);
@@ -821,6 +925,19 @@ const Renderer = (() => {
       'CSS': 'css',
       'Shell': 'shell',
       'Bash': 'bash',
+      'Java': 'java',
+      'C': 'c',
+      'C++': 'cpp',
+      'C#': 'csharp',
+      'Go': 'go',
+      'Rust': 'rust',
+      'Ruby': 'ruby',
+      'PHP': 'php',
+      'R': 'r',
+      'SQL': 'sql',
+      'YAML': 'yaml',
+      'XML': 'xml',
+      'PowerShell': 'powershell',
     };
     return map[label] || 'plaintext';
   }
@@ -832,26 +949,19 @@ const Renderer = (() => {
   let cursorTimeout = null;
   let selectionElement = null;
   let currentCursorCellIndex = -1;
+  let documentCursorActive = false;
   let measureCanvas = null;
 
   function showTeacherCursor(data) {
-    const { cellIndex, line, character, selectionStart, selectionEnd, hasSelection, source } = data;
+    const { cellIndex, line, character, selectionStart, selectionEnd, hasSelection } = data;
 
     const cellElement = document.getElementById(`cell-${cellIndex}`);
     if (!cellElement) return;
 
-    // cursor:position에 source가 포함되면 즉시 반영 (cell:update보다 먼저 도착하므로)
-    if (source !== undefined) {
-      const markupWrapper = cellElement.querySelector('.cell-markup-wrapper');
-      if (markupWrapper) {
-        markupWrapper.dataset.source = source;
-      }
-      const codeEl = cellElement.querySelector('.cell-source code');
-      if (codeEl) {
-        codeEl.textContent = source;
-        debouncedHighlight(`cell-${cellIndex}`, codeEl);
-      }
-    }
+    // NOTE: cursor:position은 source를 포함하지 않는다.
+    // 소스 동기화는 cell:update가 전담한다 (onDidChangeNotebookDocument에서 즉시 전송).
+    // 이전에 cursor:position에 source를 포함했을 때, stale getText()가 올바른 소스를
+    // 덮어쓰는 버그가 있었다.
 
     // Reset timeout
     if (cursorTimeout) clearTimeout(cursorTimeout);
@@ -871,8 +981,7 @@ const Renderer = (() => {
           const wrapper = cellElement.querySelector('.cell-markup-wrapper');
           const currentSource = wrapper?.dataset?.source || '';
           if (rawSourceCode.textContent !== currentSource) {
-            rawSourceCode.textContent = currentSource;
-            debouncedHighlight(`raw-${cellIndex}`, rawSourceCode);
+            highlightedUpdate(rawSourceCode, currentSource, 'markdown');
           }
         }
         showCursorInElement(targetEl, line, character, selectionStart, selectionEnd, hasSelection);
@@ -897,24 +1006,19 @@ const Renderer = (() => {
       const cellSource = markupWrapper.dataset.source || '';
       cellElement.classList.add('teacher-editing');
 
-      if (!cellSource.trim()) {
-        const autoScroll = document.getElementById('auto-scroll');
-        if (autoScroll && autoScroll.checked) {
-          scrollToCellElement(cellElement);
-        }
-        return;
-      }
-
+      // ★ 핵심: 빈 마크다운 셀이라도 raw source 요소를 반드시 생성한다.
+      // 생성하지 않으면 이후 cell:update가 도착해도 텍스트를 렌더할 곳이 없어
+      // 첫 글자가 학생 뷰어에 표시되지 않는 버그 발생.
       markupEl.classList.add('raw-source-mode');
       const rawSourceEl = document.createElement('pre');
       rawSourceEl.className = 'markup-raw-source';
       const codeEl = document.createElement('code');
       codeEl.className = 'language-markdown';
-      codeEl.textContent = cellSource;
       rawSourceEl.appendChild(codeEl);
       markupWrapper.appendChild(rawSourceEl);
-      debouncedHighlight(`raw-${cellIndex}`, codeEl);
 
+      // 빈 마크다운 셀이라도 커서를 표시 (코드 셀과 동일한 동작)
+      highlightedUpdate(codeEl, cellSource, 'markdown');
       showCursorInElement(codeEl, line, character, selectionStart, selectionEnd, hasSelection);
 
       const autoScroll = document.getElementById('auto-scroll');
@@ -926,11 +1030,10 @@ const Renderer = (() => {
 
     // 코드 셀
     const sourceEl = cellElement.querySelector('.cell-source pre code');
-    const sourceText = sourceEl ? (sourceEl.textContent || '') : '';
 
     cellElement.classList.add('teacher-editing');
 
-    if (!sourceEl || !sourceText.trim()) {
+    if (!sourceEl) {
       const autoScroll = document.getElementById('auto-scroll');
       if (autoScroll && autoScroll.checked) {
         scrollToCellElement(cellElement);
@@ -938,6 +1041,7 @@ const Renderer = (() => {
       return;
     }
 
+    // ★ 빈 코드 셀이라도 커서를 표시한다 (이후 cell:update로 텍스트가 들어오면 즉시 보이도록)
     showCursorInElement(sourceEl, line, character, selectionStart, selectionEnd, hasSelection);
 
     const autoScroll = document.getElementById('auto-scroll');
@@ -969,9 +1073,11 @@ const Renderer = (() => {
     const sourceText = codeEl.textContent || '';
     const lines = sourceText.split('\n');
 
-    // 빈 셀이거나 라인 범위를 벗어나면 첫 번째 라인에 커서 표시
-    const targetLine = Math.min(Math.max(0, line), Math.max(0, lines.length - 1));
-    const targetChar = lines[targetLine] ? Math.min(character, lines[targetLine].length) : 0;
+    // ★ 커서 위치를 텍스트 길이로 자르지 않는다 (race condition 방지)
+    // cursor:position이 cell:update보다 먼저 도착할 수 있어서
+    // 뷰어 텍스트가 아직 이전 상태일 때 자르면 한 글자 뒤에 커서가 표시됨
+    const targetLine = Math.max(0, line);
+    const targetChar = Math.max(0, character);
 
     codeEl.style.position = 'relative';
 
@@ -999,9 +1105,9 @@ const Renderer = (() => {
     // Handle selection highlight (노란 배경)
     if (hasSelection && selectionStart && selectionEnd &&
         (selectionStart.line !== selectionEnd.line || selectionStart.character !== selectionEnd.character)) {
-      // 라인 범위 체크
-      const startLine = Math.min(Math.max(0, selectionStart.line), lines.length - 1);
-      const endLine = Math.min(Math.max(0, selectionEnd.line), lines.length - 1);
+      // ★ 라인 범위도 텍스트 길이로 자르지 않는다 (race condition 방지)
+      const startLine = Math.max(0, selectionStart.line);
+      const endLine = Math.max(0, selectionEnd.line);
 
       const startLineText = lines[startLine] || '';
       const endLineText = lines[endLine] || '';
@@ -1019,8 +1125,8 @@ const Renderer = (() => {
 
       if (startLine === endLine) {
         // 단일 라인 선택
-        const startOffset = getCharOffset(codeEl, startLineText, Math.min(selectionStart.character, startLineText.length));
-        const endOffset = getCharOffset(codeEl, endLineText, Math.min(selectionEnd.character, endLineText.length));
+        const startOffset = getCharOffset(codeEl, startLineText, selectionStart.character);
+        const endOffset = getCharOffset(codeEl, endLineText, selectionEnd.character);
         const block = document.createElement('div');
         block.className = 'teacher-selection';
         block.style.top = `${startLine * lineHeight}px`;
@@ -1031,7 +1137,7 @@ const Renderer = (() => {
       } else {
         // 멀티라인: 각 라인별 블록 생성
         // 첫 번째 라인: startChar → 라인 끝
-        const startOffset = getCharOffset(codeEl, startLineText, Math.min(selectionStart.character, startLineText.length));
+        const startOffset = getCharOffset(codeEl, startLineText, selectionStart.character);
         const firstBlock = document.createElement('div');
         firstBlock.className = 'teacher-selection';
         firstBlock.style.top = `${startLine * lineHeight}px`;
@@ -1052,7 +1158,7 @@ const Renderer = (() => {
         }
 
         // 마지막 라인: 라인 시작 → endChar
-        const endOffset = getCharOffset(codeEl, endLineText, Math.min(selectionEnd.character, endLineText.length));
+        const endOffset = getCharOffset(codeEl, endLineText, selectionEnd.character);
         if (endOffset > 0) {
           const lastBlock = document.createElement('div');
           lastBlock.className = 'teacher-selection';
@@ -1121,7 +1227,16 @@ const Renderer = (() => {
       measureCanvas = document.createElement('canvas').getContext('2d');
     }
     measureCanvas.font = window.getComputedStyle(sourceEl).font;
-    return measureCanvas.measureText(lineText.substring(0, Math.min(charIndex, lineText.length))).width;
+    if (charIndex <= lineText.length) {
+      return measureCanvas.measureText(lineText.substring(0, charIndex)).width;
+    }
+    // cursor:position이 cell:update보다 먼저 도착한 경우 (race condition)
+    // 현재 텍스트 끝까지 측정 + 초과분은 평균 문자폭으로 외삽
+    const fullWidth = measureCanvas.measureText(lineText).width;
+    const avgCharWidth = lineText.length > 0
+      ? fullWidth / lineText.length
+      : measureCanvas.measureText('m').width; // fallback: 'm' 문자폭
+    return fullWidth + (charIndex - lineText.length) * avgCharWidth;
   }
 
   function removeCursor() {
@@ -1150,6 +1265,61 @@ const Renderer = (() => {
     currentCursorCellIndex = -1;
   }
 
+  // === Plaintext Document Cursor ===
+
+  /**
+   * Show teacher cursor in plaintext document (.py, .txt, .md 등)
+   * 코드/텍스트: 정밀 커서 + 라인 하이라이트 + 선택 영역
+   * 마크다운: 렌더된 출력 기준 스크롤만 (커서 오버레이 없음)
+   */
+  function showDocumentCursor(data) {
+    const { line, character, selectionStart, selectionEnd, hasSelection } = data;
+
+    const contentEl = document.getElementById('document-content');
+    if (!contentEl) return;
+
+    // Reset timeout
+    if (cursorTimeout) clearTimeout(cursorTimeout);
+    cursorTimeout = setTimeout(() => removeDocumentCursor(), 2000);
+
+    // Markdown rendered mode — 렌더된 HTML과 소스 라인이 1:1 매핑이 안 되므로
+    // 커서 오버레이 대신 가장 가까운 data-line 요소로 스크롤만 수행
+    const markupEl = contentEl.querySelector('.cell-markup');
+    if (markupEl) {
+      const autoScroll = document.getElementById('auto-scroll');
+      if (autoScroll && autoScroll.checked) {
+        scrollToLine(line);
+      }
+      return;
+    }
+
+    // 코드/텍스트 mode — 정밀 커서 표시
+    const codeEl = contentEl.querySelector('code');
+    if (!codeEl) return;
+
+    // 이전 오버레이 제거
+    removeCursorOverlays();
+    documentCursorActive = true;
+
+    // 커서 + 라인 하이라이트 + 선택 영역 표시
+    showCursorInElement(codeEl, line, character, selectionStart, selectionEnd, hasSelection);
+
+    // Auto-scroll
+    const autoScroll = document.getElementById('auto-scroll');
+    if (autoScroll && autoScroll.checked) {
+      scrollToCursorElement();
+    }
+  }
+
+  function removeDocumentCursor() {
+    if (cursorTimeout) {
+      clearTimeout(cursorTimeout);
+      cursorTimeout = null;
+    }
+    removeCursorOverlays();
+    documentCursorActive = false;
+  }
+
   return {
     renderNotebook,
     renderCell,
@@ -1160,6 +1330,8 @@ const Renderer = (() => {
     renderPlaintextDocument,
     updateDocumentContent,
     showTeacherCursor,
+    showDocumentCursor,
+    removeDocumentCursor,
     scrollToLine,
     scrollToRatio,
     scrollNotebookToCell,

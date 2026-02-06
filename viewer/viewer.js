@@ -9,6 +9,10 @@
   let documentType = 'notebook'; // 'notebook' | 'plaintext'
   let currentDocument = null;
 
+  // Scroll priority: cursor:position이 viewport:sync보다 우선
+  let lastCursorScrollTime = 0;
+  const CURSOR_SCROLL_PRIORITY_MS = 300;
+
   // Chat/Poll state
   let myNickname = '';
   let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
@@ -51,6 +55,10 @@
   const pollOptionCount = document.getElementById('poll-option-count');
   const pollModalCancel = document.getElementById('poll-modal-cancel');
   const pollModalStart = document.getElementById('poll-modal-start');
+  const pollModeSelect = document.getElementById('poll-mode-select');
+  const pollNumberMode = document.getElementById('poll-number-mode');
+  const pollTextMode = document.getElementById('poll-text-mode');
+  const pollTextOptions = document.getElementById('poll-text-options');
   const btnPoll = document.getElementById('btn-poll');
   const btnEndPoll = document.getElementById('btn-end-poll');
 
@@ -61,9 +69,9 @@
     // Theme
     initTheme();
 
-    // Teacher UI
+    // Teacher UI (직접 브라우저 접속 시)
     if (isTeacher) {
-      myNickname = 'Teacher';
+      myNickname = 'Teacher'; // 서버에서 실제 이름으로 덮어씌움
       if (btnPoll) btnPoll.style.display = '';
     }
 
@@ -102,6 +110,15 @@
     btnPoll?.addEventListener('click', showNewPollModal);
     btnEndPoll?.addEventListener('click', () => {
       WsClient.send('poll:end', {});
+    });
+    pollModeSelect?.addEventListener('change', () => {
+      if (pollModeSelect.value === 'text') {
+        pollNumberMode.style.display = 'none';
+        pollTextMode.style.display = '';
+      } else {
+        pollNumberMode.style.display = '';
+        pollTextMode.style.display = 'none';
+      }
     });
     pollModalCancel?.addEventListener('click', () => {
       pollModal.style.display = 'none';
@@ -184,6 +201,9 @@
       case 'cursor:position':
         if (documentType === 'notebook') {
           Renderer.showTeacherCursor(msg.data);
+        } else if (documentType === 'plaintext') {
+          Renderer.showDocumentCursor(msg.data);
+          lastCursorScrollTime = Date.now();
         }
         break;
 
@@ -265,6 +285,8 @@
     if (data.index >= 0 && data.index < notebookCells.length) {
       notebookCells[data.index].source = data.source;
       Renderer.updateCellSource(data.index, data.source);
+    } else {
+      console.error('[JLS] cell:update DROPPED — index out of bounds:', data.index, '>=', notebookCells.length);
     }
   }
 
@@ -328,6 +350,13 @@
 
   function handleViewportSync(data) {
     if (data.mode === 'plaintext' && documentType === 'plaintext') {
+      // 마크다운 문서는 viewport:sync 무시 — cursor:position으로만 스크롤
+      // (마크다운은 렌더된 HTML과 소스 라인이 1:1 대응이 안 되어 viewport 라인 기반 스크롤이 부정확)
+      if (currentDocument && currentDocument.languageId === 'markdown') return;
+
+      // 커서 스크롤이 최근에 발생했으면 viewport 스크롤 무시 (커서 우선)
+      if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
+
       const autoScroll = document.getElementById('auto-scroll');
       if (autoScroll && autoScroll.checked && typeof data.firstVisibleLine === 'number') {
         Renderer.scrollToLine(data.firstVisibleLine);
@@ -345,7 +374,7 @@
     header.className = 'chat-msg-header';
 
     const nick = document.createElement('span');
-    nick.className = 'chat-nickname';
+    nick.className = 'chat-nickname' + (data.isTeacher ? ' teacher' : '');
     nick.textContent = data.nickname;
     header.appendChild(nick);
 
@@ -466,6 +495,7 @@
     const card = document.createElement('div');
     card.className = 'chat-poll-card';
     card.id = 'poll-card-' + data.pollId;
+    if (data.options) card.dataset.options = JSON.stringify(data.options);
 
     const questionEl = document.createElement('div');
     questionEl.className = 'chat-poll-question';
@@ -477,7 +507,7 @@
 
     for (let i = 0; i < data.optionCount; i++) {
       const btn = document.createElement('button');
-      btn.textContent = (i + 1).toString();
+      btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
       btn.dataset.option = i;
       if (hasVoted) {
         btn.disabled = true;
@@ -535,9 +565,10 @@
     if (data.pollId !== currentPollId) return;
     const card = document.getElementById('poll-card-' + data.pollId);
     if (card) {
+      const opts = data.options || (card.dataset.options ? JSON.parse(card.dataset.options) : null);
       const resultsEl = card.querySelector('.chat-poll-results');
       const statusEl = card.querySelector('.chat-poll-status');
-      if (resultsEl) renderPollBars(resultsEl, data.votes, data.totalVoters);
+      if (resultsEl) renderPollBars(resultsEl, data.votes, data.totalVoters, opts);
       if (statusEl) statusEl.textContent = `${data.totalVoters}\uBA85 \uD22C\uD45C`;
     }
   }
@@ -549,9 +580,10 @@
     currentPollId = null;
 
     if (card) {
+      const opts = data.options || (card.dataset.options ? JSON.parse(card.dataset.options) : null);
       const resultsEl = card.querySelector('.chat-poll-results');
       const statusEl = card.querySelector('.chat-poll-status');
-      if (resultsEl) renderPollBars(resultsEl, data.finalVotes, data.totalVoters);
+      if (resultsEl) renderPollBars(resultsEl, data.finalVotes, data.totalVoters, opts);
       if (statusEl) statusEl.textContent = `\uD22C\uD45C \uC885\uB8CC \u2014 \uCD1D ${data.totalVoters}\uBA85`;
       card.classList.add('ended');
 
@@ -564,7 +596,7 @@
     if (btnEndPoll) btnEndPoll.style.display = 'none';
   }
 
-  function renderPollBars(container, votes, totalVoters) {
+  function renderPollBars(container, votes, totalVoters, options) {
     container.innerHTML = '';
 
     for (let i = 0; i < votes.length; i++) {
@@ -573,7 +605,7 @@
 
       const label = document.createElement('span');
       label.className = 'poll-bar-label';
-      label.textContent = (i + 1).toString();
+      label.textContent = (options && options[i]) ? options[i] : (i + 1).toString();
 
       const track = document.createElement('div');
       track.className = 'poll-bar-track';
@@ -601,6 +633,10 @@
     if (!isTeacher) return;
     pollQuestionInput.value = '';
     pollOptionCount.value = '5';
+    if (pollModeSelect) pollModeSelect.value = 'number';
+    if (pollNumberMode) pollNumberMode.style.display = '';
+    if (pollTextMode) pollTextMode.style.display = 'none';
+    if (pollTextOptions) pollTextOptions.value = '';
     pollModal.style.display = 'flex';
     pollQuestionInput.focus();
   }
@@ -611,9 +647,22 @@
       pollQuestionInput.focus();
       return;
     }
-    const optionCount = parseInt(pollOptionCount.value) || 5;
     const pollId = Date.now().toString();
-    WsClient.send('poll:start', { question, optionCount, pollId });
+    let pollData;
+
+    if (pollModeSelect && pollModeSelect.value === 'text') {
+      const lines = (pollTextOptions ? pollTextOptions.value : '').split('\n').map(l => l.trim()).filter(l => l);
+      if (lines.length < 2) {
+        if (pollTextOptions) pollTextOptions.focus();
+        return;
+      }
+      pollData = { question, optionCount: lines.length, options: lines, pollId };
+    } else {
+      const optionCount = parseInt(pollOptionCount.value) || 5;
+      pollData = { question, optionCount, pollId };
+    }
+
+    WsClient.send('poll:start', pollData);
     pollModal.style.display = 'none';
   }
 

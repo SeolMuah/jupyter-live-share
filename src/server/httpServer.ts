@@ -75,9 +75,18 @@ export function startHttpServer(port: number): Promise<http.Server> {
   return new Promise((resolve, reject) => {
     app = express();
 
-    // 정적 파일 서빙 (브라우저 뷰어)
+    // 정적 파일 서빙 (브라우저 뷰어) — 캐시 완전 비활성화
+    // 학생 브라우저가 구버전 JS/CSS를 캐시하면 실시간 동기화 버그 발생
     const viewerPath = path.join(__dirname, 'viewer');
-    app.use(express.static(viewerPath));
+    app.use(express.static(viewerPath, {
+      etag: false,
+      lastModified: false,
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      },
+    }));
 
     app.use(express.json());
 
@@ -124,14 +133,17 @@ export function startHttpServer(port: number): Promise<http.Server> {
 
     // Poll API (VS Code에서 사용)
     app.post('/api/poll/start', requireLocalhost, (req, res) => {
-      const { question, optionCount } = req.body;
+      const { question, optionCount, options } = req.body;
       if (!question || typeof question !== 'string') {
         res.status(400).json({ error: 'question is required' });
         return;
       }
-      const count = Math.min(Math.max(Number(optionCount) || 2, 2), 5);
+      const count = Math.min(Math.max(Number(optionCount) || 2, 2), 10);
       const pollId = Date.now().toString();
-      startPoll(question.trim(), count, pollId);
+      const sanitizedOptions = Array.isArray(options)
+        ? options.map((o: unknown) => String(o || '').trim().slice(0, 100))
+        : undefined;
+      startPoll(question.trim(), count, pollId, sanitizedOptions);
       res.json({ success: true, pollId });
     });
 

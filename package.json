@@ -2,7 +2,7 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Share Jupyter Notebooks in real-time with students via browser",
-  "version": "0.2.0",
+  "version": "1.1.0",
   "publisher": "jupyter-live-share",
   "license": "MIT",
   "repository": {
@@ -89,6 +89,14 @@
           "id": "jupyterLiveShare.sessionView",
           "name": "Session",
           "type": "webview"
+        }
+      ],
+      "panel": [
+        {
+          "id": "jupyterLiveShare.chatPanel",
+          "name": "Live Chat",
+          "type": "webview",
+          "when": "jupyterLiveShare.sessionActive"
         }
       ]
     }
