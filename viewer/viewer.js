@@ -541,8 +541,9 @@
       const btn = document.createElement('button');
       btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
       btn.dataset.option = i;
-      if (savedVote !== null && parseInt(savedVote) === i) {
-        btn.classList.add('voted');
+      if (savedVote !== null) {
+        btn.disabled = true;
+        if (parseInt(savedVote) === i) btn.classList.add('voted');
       }
       btn.addEventListener('click', () => votePoll(data.pollId, i));
       buttonsEl.appendChild(btn);
@@ -574,23 +575,20 @@
   function votePoll(pollId, option) {
     if (pollId !== currentPollId) return;
 
-    // 같은 선택지 재클릭 무시
+    // 이미 투표했으면 무시
     const savedVote = localStorage.getItem('jls-poll-' + pollId);
-    if (savedVote !== null && parseInt(savedVote) === option) return;
+    if (savedVote !== null) return;
 
     localStorage.setItem('jls-poll-' + pollId, option.toString());
     WsClient.send('poll:vote', { pollId, option });
 
-    // 현재 선택만 하이라이트 (버튼은 계속 활성 상태)
+    // 투표한 버튼 하이라이트 + 전체 버튼 비활성화
     const card = document.getElementById('poll-card-' + pollId);
     if (card) {
       const buttons = card.querySelectorAll('.chat-poll-buttons button');
       buttons.forEach((btn, i) => {
-        if (i === option) {
-          btn.classList.add('voted');
-        } else {
-          btn.classList.remove('voted');
-        }
+        if (i === option) btn.classList.add('voted');
+        btn.disabled = true;
       });
     }
   }

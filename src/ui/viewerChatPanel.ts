@@ -592,8 +592,9 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
           btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
           btn.dataset.option = i;
           btn.addEventListener('click', () => votePoll(data.pollId, i));
-          if (hasVoted && parseInt(savedVote) === i) {
-            btn.classList.add('voted');
+          if (hasVoted) {
+            btn.disabled = true;
+            if (parseInt(savedVote) === i) btn.classList.add('voted');
           }
           buttonsEl.appendChild(btn);
         }
@@ -617,7 +618,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         if (pollId !== currentPollId) return;
         const savedVote = localStorage.getItem('jls-poll-' + pollId);
-        if (savedVote !== null && parseInt(savedVote) === option) return;
+        if (savedVote !== null) return;
         localStorage.setItem('jls-poll-' + pollId, option.toString());
         ws.send(JSON.stringify({ type: 'poll:vote', data: { pollId, option } }));
 
@@ -626,7 +627,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
           const buttons = card.querySelectorAll('.poll-buttons button');
           buttons.forEach((btn, i) => {
             if (i === option) btn.classList.add('voted');
-            else btn.classList.remove('voted');
+            btn.disabled = true;
           });
         }
       }
