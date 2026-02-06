@@ -247,6 +247,7 @@ async function cleanupSession(
     fileName: undefined,
     pollActive: false,
   });
+  sidebarView?.resetBadge();
 
   Logger.info('Session cleaned up');
 }

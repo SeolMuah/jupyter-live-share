@@ -706,16 +706,8 @@ const Renderer = (() => {
     copyBtn.className = 'copy-btn document-copy-btn';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', () => {
-      const contentEl = document.getElementById('document-content');
-      const codeEl = contentEl?.querySelector('code');
-      const markupEl = contentEl?.querySelector('.cell-markup');
-      // For code: get textContent, for markdown: get from data attribute or raw text
-      let text = '';
-      if (codeEl) {
-        text = codeEl.textContent || '';
-      } else if (markupEl) {
-        text = wrapper.dataset.source || markupEl.textContent || '';
-      }
+      // Always prefer data-source (raw content) for accurate copy
+      const text = wrapper.dataset.source || '';
       copyToClipboard(text, copyBtn);
     });
     header.appendChild(copyBtn);

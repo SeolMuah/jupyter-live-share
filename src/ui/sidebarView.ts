@@ -18,6 +18,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
     isRunning: false,
     viewerCount: 0,
   };
+  private _unreadCount = 0;
 
   private _onCommand?: (command: string, data?: unknown) => void;
 
@@ -39,12 +40,26 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri],
     };
 
+    // 패널이 보이게 되면 안읽은 메시지 뱃지 초기화
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this._unreadCount = 0;
+        this._updateBadge();
+      }
+    });
+
     // 핸들러를 HTML 설정 전에 등록 (ready 메시지 유실 방지)
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'command') {
         this._onCommand?.(msg.command, msg.data);
       } else if (msg.type === 'ready') {
         this._sendState();
+      } else if (msg.type === 'newMessage') {
+        // 사이드바가 보이지 않을 때만 안읽은 메시지 카운트 증가
+        if (this._view && !this._view.visible) {
+          this._unreadCount++;
+          this._updateBadge();
+        }
       }
     });
 
@@ -58,6 +73,18 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
   refresh() {
     this._sendState();
+  }
+
+  resetBadge() {
+    this._unreadCount = 0;
+    this._updateBadge();
+  }
+
+  private _updateBadge(): void {
+    if (!this._view) return;
+    this._view.badge = this._unreadCount > 0
+      ? { tooltip: `${this._unreadCount}개의 새 메시지`, value: this._unreadCount }
+      : undefined;
   }
 
   private _sendState() {
@@ -761,6 +788,11 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         chatMessages.appendChild(div);
         trimChatMessages();
         chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        // 학생 메시지인 경우 extension에 알림 (뱃지용)
+        if (!data.isTeacher) {
+          vscode.postMessage({ type: 'newMessage' });
+        }
       }
 
       function addSystemMessage(text) {
