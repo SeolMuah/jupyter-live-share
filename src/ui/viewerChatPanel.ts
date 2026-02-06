@@ -100,9 +100,11 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
   /** 안읽은 메시지 뱃지 업데이트 */
   private _updateBadge(): void {
     if (!this._view) return;
+    // VS Code bug: badge = undefined 시 Activity Bar에서 뱃지가 안 사라짐
+    // (microsoft/vscode#162900, microsoft/vscode#210645)
     this._view.badge = this._unreadCount > 0
       ? { tooltip: `${this._unreadCount}개의 새 메시지`, value: this._unreadCount }
-      : undefined;
+      : { value: 0, tooltip: '' };
   }
 
   private _getHtml(webview: vscode.Webview): string {

@@ -1082,6 +1082,10 @@ const Renderer = (() => {
     const targetChar = Math.max(0, character);
 
     codeEl.style.position = 'relative';
+    // Ensure block layout for correct selection positioning
+    // Without this, inline <code> (e.g. .txt, .md raw) uses text-width containing block
+    // instead of full parent width, causing narrow/misaligned selection overlays
+    codeEl.style.display = 'block';
 
     // Create line highlight (full line background)
     const lineHighlight = document.createElement('div');

@@ -297,7 +297,7 @@ export function startWsServer(
             nickname: meta.nickname,
             text,
             timestamp: Date.now(),
-            isTeacher: meta.isTeacher,
+            isTeacher: meta.isTeacherPanel,
           });
           return;
         }

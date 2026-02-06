@@ -830,13 +830,15 @@ footer label {
 }
 
 .chat-msg.teacher-msg .chat-text {
-  background: color-mix(in srgb, #2ea043 10%, var(--bg-cell));
-  border-color: color-mix(in srgb, #2ea043 25%, var(--border-color));
+  background: #e6f6e9;
+  border-color: #a3d9a5;
+  border-left: 3px solid #2ea043;
 }
 
 [data-theme="dark"] .chat-msg.teacher-msg .chat-text {
-  background: color-mix(in srgb, #3fb950 12%, var(--bg-cell));
-  border-color: color-mix(in srgb, #3fb950 20%, var(--border-color));
+  background: #1a2e1f;
+  border-color: #2d5a35;
+  border-left: 3px solid #3fb950;
 }
 
 .chat-system {

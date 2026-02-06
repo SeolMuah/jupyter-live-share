@@ -34,7 +34,7 @@
 ### VSIX 파일로 설치 (권장)
 
 ```bash
-code --install-extension jupyter-live-share-1.2.0.vsix
+code --install-extension jupyter-live-share-2.0.0.vsix
 ```
 
 또는 VS Code → Extensions → `...` → "Install from VSIX..." 에서 `.vsix` 파일 선택
@@ -295,8 +295,49 @@ vsce package       # VSIX 패키징
 
 - [docs/PUBLISHING.md](docs/PUBLISHING.md) - Extension 배포 방법 (VSIX 직접 배포, Open VSX, GitHub Releases)
 - [docs/prd_jupyter_live_share.md](docs/prd_jupyter_live_share.md) - 제품 요구사항 문서 (PRD)
+- [docs/vscode-badge-workaround.md](docs/vscode-badge-workaround.md) - VS Code WebviewView.badge 초기화 버그 워크어라운드
 
 ## 변경 이력
+
+### v2.0.0
+
+**파일 전환 안정성 대폭 개선**
+
+- 노트북↔텍스트 파일 전환 시 발생하던 race condition 완전 해결
+- `switchToNotebook()` / `switchToTextDocument()` 함수 도입: 모드 전환 시 이전 핸들러 완전 정리 후 새 핸들러 등록
+- `flushAndResetState()`: 파일 전환 시 모든 pending 타이머, 커서 상태, 소스 캐시를 일괄 초기화
+- idle 모드에서 파일을 열 때도 기존 뷰어에게 즉시 브로드캐스트
+
+**채팅 선생님 메시지 판별 수정 (Cloudflare Tunnel)**
+
+- `isTeacher` 판별을 `meta.isTeacher` (IP 기반)에서 `meta.isTeacherPanel` (연결 타입 기반)으로 변경
+- Cloudflare Tunnel 사용 시에도 선생님 메시지가 정확히 초록색으로 표시됨
+
+**사이드바 뱃지 초기화 버그 수정**
+
+- VS Code API 버그 대응: `badge = undefined` 대신 `{ value: 0, tooltip: '' }` 사용 ([microsoft/vscode#162900](https://github.com/microsoft/vscode/issues/162900))
+- `onDidChangeVisibility` + 1초 폴링 + `mousedown`/`focusin`/`visibilitychange`/`focus` 이벤트로 확실한 뱃지 초기화
+- 사이드바와 Viewer Chat 패널 모두 적용
+
+**브라우저 선생님 메시지 배경색 수정**
+
+- `color-mix()` CSS 함수에서 명시적 색상값으로 변경 (브라우저 호환성 개선)
+- 다크/라이트 모드 모두 안정적인 초록색 배경 표시
+
+**텍스트 파일 선택 영역 렌더링 수정**
+
+- `.txt`, `.md` 파일에서 드래그 선택 시 선택 영역이 좁게 표시되던 문제 수정
+- `codeEl.style.display = 'block'`으로 전체 너비 사용 보장
+
+**모드 인식 커서 이벤트 처리**
+
+- `cursor:position` 이벤트에 `mode` 필드 기반 분기 추가 (plaintext vs notebook)
+- `cell:update`, `cell:output`, `cells:structure` 이벤트에 `documentType` 가드 추가
+- 파일 전환 직후 이전 모드의 잔여 이벤트가 현재 뷰를 깨뜨리지 않도록 방지
+
+**기술 문서**
+
+- `docs/vscode-badge-workaround.md`: VS Code badge API 버그 및 워크어라운드 문서화
 
 ### v1.2.0
 

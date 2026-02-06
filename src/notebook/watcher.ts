@@ -23,6 +23,58 @@ let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
 
+/**
+ * Clear all pending timers and reset state on file switch.
+ * Prevents stale events (cursor, cell updates) from the previous file
+ * from leaking into the new file context.
+ */
+function flushAndResetState() {
+  if (cursorTrailingTimer) {
+    clearTimeout(cursorTrailingTimer);
+    cursorTrailingTimer = null;
+  }
+  for (const timer of debounceTimers.values()) {
+    clearTimeout(timer);
+  }
+  debounceTimers.clear();
+  if (textDebounceTimer) {
+    clearTimeout(textDebounceTimer);
+    textDebounceTimer = null;
+  }
+  // Reset throttle timestamps → first event for new file passes immediately
+  lastFocusTime = 0;
+  lastCursorTime = 0;
+  lastActiveCellIndex = -1;
+  lastSentSources.clear();
+}
+
+/**
+ * Switch to notebook mode: full cleanup → re-register ALL handlers → broadcast.
+ * Solves the critical bug where text→notebook switch left notebook handlers unregistered.
+ */
+function switchToNotebook(notebook: vscode.NotebookDocument) {
+  flushAndResetState();
+  for (const d of disposables) { d.dispose(); }
+  disposables = [];
+  startWatchingNotebook(notebook);
+  const editor = vscode.window.activeNotebookEditor;
+  const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
+  broadcast('notebook:full', serializeNotebook(notebook, activeCellIndex));
+  Logger.info(`Switched to notebook: ${notebook.uri.path}`);
+}
+
+/**
+ * Switch to text document mode: full cleanup → re-register ALL handlers → broadcast.
+ */
+function switchToTextDocument(document: vscode.TextDocument) {
+  flushAndResetState();
+  for (const d of disposables) { d.dispose(); }
+  disposables = [];
+  startWatchingTextDocument(document);
+  broadcast('document:full', serializeTextDocument(document));
+  Logger.info(`Switched to text document: ${document.uri.path}`);
+}
+
 export function getWatchMode(): 'notebook' | 'plaintext' | null {
   return watchMode;
 }
@@ -74,21 +126,7 @@ function setupNewViewerHandler() {
     } else if (watchMode === 'plaintext' && currentTextDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
       sendTo(ws, 'document:full', serialized);
-
-      // 새 뷰어에게 현재 뷰포트 정보 전송
-      const editor = vscode.window.activeTextEditor;
-      if (editor && editor.visibleRanges.length > 0) {
-        const totalLines = currentTextDocument.lineCount;
-        const firstVisibleLine = editor.visibleRanges[0].start.line;
-        const lastVisibleLine = editor.visibleRanges[0].end.line;
-
-        sendTo(ws, 'viewport:sync', {
-          mode: 'plaintext',
-          firstVisibleLine,
-          lastVisibleLine,
-          totalLines,
-        });
-      }
+      // plaintext 모드: viewport:sync 전송하지 않음 (커서 클릭/드래그만 동기화)
     }
 
     // 활성 설문이 있으면 새 접속자에게 전송
@@ -146,8 +184,8 @@ function startWatchingIdle() {
   disposables.push(
     vscode.window.onDidChangeActiveNotebookEditor((editor) => {
       if (editor && editor.notebook.notebookType === 'jupyter-notebook') {
-        // idle 리스너 정리 후 노트북 모드로 전환
-        cleanupIdleAndSwitch(() => startWatchingNotebook(editor.notebook));
+        // switchToNotebook: dispose idle listeners → register notebook handlers → broadcast to existing viewers
+        switchToNotebook(editor.notebook);
       }
     })
   );
@@ -159,22 +197,10 @@ function startWatchingIdle() {
       if (editor.document.uri.scheme === 'vscode-notebook-cell') return;
       if (editor.document.uri.scheme !== 'file') return;
 
-      // idle 리스너 정리 후 텍스트 모드로 전환
-      cleanupIdleAndSwitch(() => startWatchingTextDocument(editor.document));
+      // switchToTextDocument: dispose idle listeners → register text handlers → broadcast to existing viewers
+      switchToTextDocument(editor.document);
     })
   );
-}
-
-/**
- * Idle 모드의 리스너를 정리하고 새 모드를 시작.
- */
-function cleanupIdleAndSwitch(startNewMode: () => void) {
-  for (const d of disposables) {
-    d.dispose();
-  }
-  disposables = [];
-  setupNewViewerHandler();
-  startNewMode();
 }
 
 function startWatchingNotebook(notebook: vscode.NotebookDocument) {
@@ -368,20 +394,12 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
     })
   );
 
-  // 활성 노트북 에디터 변경 (다른 파일로 전환)
+  // 활성 노트북 에디터 변경 (다른 노트북으로 전환)
   disposables.push(
     vscode.window.onDidChangeActiveNotebookEditor((editor) => {
-      if (editor && editor.notebook.notebookType === 'jupyter-notebook') {
-        currentNotebook = editor.notebook;
-        currentTextDocument = null;
-        watchMode = 'notebook';
-        Logger.info(`Switched to notebook: ${currentNotebook.uri.path}`);
-
-        // 새 노트북 전체 상태 broadcast
-        const activeCellIndex = editor.selections.length > 0 ? editor.selections[0].start : 0;
-        const serialized = serializeNotebook(currentNotebook, activeCellIndex);
-        broadcast('notebook:full', serialized);
-      }
+      if (!editor || editor.notebook.notebookType !== 'jupyter-notebook') return;
+      if (currentNotebook && editor.notebook.uri.toString() === currentNotebook.uri.toString()) return;
+      switchToNotebook(editor.notebook);
     })
   );
 
@@ -389,20 +407,10 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
   disposables.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (!editor) return;
-      // 노트북 셀 에디터는 무시 (scheme이 'vscode-notebook-cell')
       if (editor.document.uri.scheme === 'vscode-notebook-cell') return;
-
-      // 텍스트 파일로 전환
-      currentNotebook = null;
-      currentTextDocument = editor.document;
-      watchMode = 'plaintext';
-      Logger.info(`Switched to text document: ${currentTextDocument.uri.path}`);
-
-      const serialized = serializeTextDocument(currentTextDocument);
-      broadcast('document:full', serialized);
-
-      // 텍스트 문서 변경 감시 시작
-      setupTextDocumentWatcher();
+      if (editor.document.uri.scheme !== 'file') return;
+      if (currentTextDocument && editor.document.uri.toString() === currentTextDocument.uri.toString()) return;
+      switchToTextDocument(editor.document);
     })
   );
 }
@@ -421,30 +429,18 @@ function startWatchingTextDocument(document: vscode.TextDocument) {
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (!editor) return;
       if (editor.document.uri.scheme === 'vscode-notebook-cell') return;
-
-      currentTextDocument = editor.document;
-      currentNotebook = null;
-      watchMode = 'plaintext';
-      Logger.info(`Switched to text document: ${currentTextDocument.uri.path}`);
-
-      const serialized = serializeTextDocument(currentTextDocument);
-      broadcast('document:full', serialized);
+      if (editor.document.uri.scheme !== 'file') return;
+      if (currentTextDocument && editor.document.uri.toString() === currentTextDocument.uri.toString()) return;
+      switchToTextDocument(editor.document);
     })
   );
 
   // 노트북 에디터로 전환 감지
   disposables.push(
     vscode.window.onDidChangeActiveNotebookEditor((editor) => {
-      if (editor && editor.notebook.notebookType === 'jupyter-notebook') {
-        currentTextDocument = null;
-        currentNotebook = editor.notebook;
-        watchMode = 'notebook';
-        Logger.info(`Switched to notebook: ${currentNotebook.uri.path}`);
-
-        const activeCellIndex = editor.selections.length > 0 ? editor.selections[0].start : 0;
-        const serialized = serializeNotebook(currentNotebook, activeCellIndex);
-        broadcast('notebook:full', serialized);
-      }
+      if (!editor || editor.notebook.notebookType !== 'jupyter-notebook') return;
+      if (currentNotebook && editor.notebook.uri.toString() === currentNotebook.uri.toString()) return;
+      switchToNotebook(editor.notebook);
     })
   );
 }
@@ -474,31 +470,11 @@ function setupTextDocumentWatcher() {
   (textWatcher as any).__textDocWatcher = true;
   disposables.push(textWatcher);
 
-  // 텍스트 에디터 뷰포트(스크롤) 변경 감지
-  const viewportWatcher = vscode.window.onDidChangeTextEditorVisibleRanges((event) => {
-    if (!currentTextDocument) return;
-    if (event.textEditor.document.uri.toString() !== currentTextDocument.uri.toString()) return;
-    // 노트북 셀 에디터는 무시
-    if (event.textEditor.document.uri.scheme === 'vscode-notebook-cell') return;
-
-    // throttle
-    const now = Date.now();
-    if (now - lastViewportTime < VIEWPORT_THROTTLE_MS) return;
-    lastViewportTime = now;
-
-    if (event.visibleRanges.length > 0) {
-      const totalLines = currentTextDocument.lineCount;
-      const firstVisibleLine = event.visibleRanges[0].start.line;
-      const lastVisibleLine = event.visibleRanges[0].end.line;
-
-      // scrollRatio 대신 라인 인덱스 기반 동기화 (더 정확함)
-      broadcast('viewport:sync', {
-        mode: 'plaintext',
-        firstVisibleLine,
-        lastVisibleLine,
-        totalLines,
-      });
-    }
+  // 텍스트 에디터 뷰포트(스크롤) 변경 감지 — 비활성화
+  // 선생님 스크롤은 학생에게 동기화하지 않음 (커서 클릭/드래그만 동기화)
+  const viewportWatcher = vscode.window.onDidChangeTextEditorVisibleRanges(() => {
+    // plaintext 모드에서는 viewport:sync를 보내지 않음
+    // cursor:position 이벤트가 클릭/드래그 시 학생 스크롤을 담당
   });
 
   (viewportWatcher as any).__textDocWatcher = true;

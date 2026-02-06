@@ -222,11 +222,16 @@
         break;
 
       case 'cursor:position':
-        if (documentType === 'notebook') {
-          Renderer.showTeacherCursor(msg.data);
-        } else if (documentType === 'plaintext') {
-          Renderer.showDocumentCursor(msg.data);
-          lastCursorScrollTime = Date.now();
+        // Mode-aware: plaintext cursor has mode:'plaintext', notebook cursor has no mode field
+        if (msg.data.mode === 'plaintext') {
+          if (documentType === 'plaintext') {
+            Renderer.showDocumentCursor(msg.data);
+            lastCursorScrollTime = Date.now();
+          }
+        } else {
+          if (documentType === 'notebook') {
+            Renderer.showTeacherCursor(msg.data);
+          }
         }
         break;
 
@@ -309,6 +314,7 @@
   }
 
   function handleCellUpdate(data) {
+    if (documentType !== 'notebook') return;
     if (data.index >= 0 && data.index < notebookCells.length) {
       notebookCells[data.index].source = data.source;
       Renderer.updateCellSource(data.index, data.source);
@@ -318,6 +324,7 @@
   }
 
   function handleCellOutput(data) {
+    if (documentType !== 'notebook') return;
     if (data.index >= 0 && data.index < notebookCells.length) {
       notebookCells[data.index].outputs = data.outputs;
       if (data.executionOrder) {
@@ -350,6 +357,7 @@
   }
 
   function handleCellsStructure(data) {
+    if (documentType !== 'notebook') return;
     if (data.type === 'insert' && data.addedCells) {
       notebookCells.splice(data.index, 0, ...data.addedCells);
     } else if (data.type === 'delete') {

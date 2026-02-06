@@ -48,18 +48,38 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
+    // 폴링 기반 뱃지 초기화 (onDidChangeVisibility 누락 대비)
+    // 사이드바가 visible인데 뱃지가 남아있으면 1초 내 자동 초기화
+    const badgeCheckInterval = setInterval(() => {
+      if (this._view?.visible && this._unreadCount > 0) {
+        this._unreadCount = 0;
+        this._updateBadge();
+      }
+    }, 1000);
+
+    webviewView.onDidDispose(() => {
+      clearInterval(badgeCheckInterval);
+    });
+
     // 핸들러를 HTML 설정 전에 등록 (ready 메시지 유실 방지)
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'command') {
         this._onCommand?.(msg.command, msg.data);
       } else if (msg.type === 'ready') {
         this._sendState();
+        // webview 로드 시 뱃지 초기화
+        this._unreadCount = 0;
+        this._updateBadge();
       } else if (msg.type === 'newMessage') {
         // 사이드바가 보이지 않을 때만 안읽은 메시지 카운트 증가
         if (this._view && !this._view.visible) {
           this._unreadCount++;
           this._updateBadge();
         }
+      } else if (msg.type === 'resetBadge') {
+        // 사용자가 사이드바와 상호작용 시 뱃지 초기화
+        this._unreadCount = 0;
+        this._updateBadge();
       }
     });
 
@@ -82,9 +102,12 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
   private _updateBadge(): void {
     if (!this._view) return;
+    // VS Code bug: badge = undefined 시 Activity Bar에서 뱃지가 안 사라짐
+    // (microsoft/vscode#162900, microsoft/vscode#210645)
+    // 워크어라운드: { value: 0, tooltip: '' } 사용
     this._view.badge = this._unreadCount > 0
       ? { tooltip: `${this._unreadCount}개의 새 메시지`, value: this._unreadCount }
-      : undefined;
+      : { value: 0, tooltip: '' };
   }
 
   private _sendState() {
@@ -553,6 +576,23 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       // Notify extension that webview is ready
       vscode.postMessage({ type: 'ready' });
+
+      // 사이드바 활성화 감지: 뱃지 초기화
+      document.addEventListener('mousedown', () => {
+        vscode.postMessage({ type: 'resetBadge' });
+      });
+      document.addEventListener('focusin', () => {
+        vscode.postMessage({ type: 'resetBadge' });
+      });
+      // webview가 보이게 되면 (탭 전환, 사이드바 열림 등)
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          vscode.postMessage({ type: 'resetBadge' });
+        }
+      });
+      window.addEventListener('focus', () => {
+        vscode.postMessage({ type: 'resetBadge' });
+      });
 
       // Button handlers
       btnStart.addEventListener('click', () => {
