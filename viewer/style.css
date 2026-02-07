@@ -513,6 +513,15 @@ header {
   overflow-wrap: normal;
 }
 
+/* Markdown Images — 셀 너비 내에서 제한 (코드 출력 이미지와 동일 정책) */
+.cell-markup img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.5em 0;
+  border-radius: 4px;
+}
+
 /* Markdown Tables */
 .cell-markup table {
   border-collapse: collapse;
@@ -1286,3 +1295,124 @@ footer label {
 }
 
 /* Teacher viewport indicator 제거 — 스크롤 동기화는 cursor:position이 전담 */
+
+/* === Drawing Canvas Overlay === */
+#draw-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 300;
+  pointer-events: none;
+}
+
+/* === Drawing Toolbar === */
+#draw-toolbar {
+  position: fixed;
+  bottom: calc(var(--footer-height) + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  z-index: 400;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+#draw-toggle {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+#draw-toggle.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.draw-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.draw-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+
+.tool-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.tool-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.color-btn {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--btn-color);
+  cursor: pointer;
+  padding: 0;
+}
+
+.color-btn.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.width-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.width-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+#draw-undo,
+#draw-clear {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+#draw-clear {
+  color: var(--error-text);
+}

@@ -2,6 +2,7 @@
 
 const Renderer = (() => {
   const HIGHLIGHT_DEBOUNCE_MS = 150;
+  const CURSOR_TIMEOUT_MS = 2000;
   let highlightTimers = {};
 
   /**
@@ -965,12 +966,12 @@ const Renderer = (() => {
     // 이전에 cursor:position에 source를 포함했을 때, stale getText()가 올바른 소스를
     // 덮어쓰는 버그가 있었다.
 
-    // Reset timeout
+    // 기존 타임아웃 취소 (fast/full 공통)
     if (cursorTimeout) clearTimeout(cursorTimeout);
-    cursorTimeout = setTimeout(() => removeCursor(), 2000);
 
     // === Fast path: 같은 셀이면 커서 오버레이만 업데이트 (DOM 재생성 없음) ===
     if (cellIndex === currentCursorCellIndex) {
+      cursorTimeout = setTimeout(() => removeCursor(), CURSOR_TIMEOUT_MS);
       removeCursorOverlays();
 
       const rawSourceCode = cellElement.querySelector('.markup-raw-source code');
@@ -999,6 +1000,8 @@ const Renderer = (() => {
     // === Full path: 다른 셀로 이동 ===
     removeCursor();
     currentCursorCellIndex = cellIndex;
+    // removeCursor()가 cursorTimeout을 null로 초기화하므로, 새 셀에 대한 타임아웃을 재설정
+    cursorTimeout = setTimeout(() => removeCursor(), CURSOR_TIMEOUT_MS);
 
     // 마크다운 셀: raw source 모드 전환
     const markupWrapper = cellElement.querySelector('.cell-markup-wrapper');
@@ -1346,7 +1349,7 @@ const Renderer = (() => {
 
     // Reset timeout
     if (cursorTimeout) clearTimeout(cursorTimeout);
-    cursorTimeout = setTimeout(() => removeDocumentCursor(), 2000);
+    cursorTimeout = setTimeout(() => removeDocumentCursor(), CURSOR_TIMEOUT_MS);
 
     // Markdown 렌더 모드면 raw 소스 모드로 전환 (선생님과 동일한 뷰)
     if (mdDocViewMode === 'rendered' && contentEl.querySelector('.cell-markup')) {

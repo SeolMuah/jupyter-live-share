@@ -4,6 +4,7 @@ import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
 import { ViewerChatPanelProvider } from './ui/viewerChatPanel';
 import { ViewerPanel } from './ui/viewerPanel';
+import { TeacherPreviewPanel } from './ui/teacherPreviewPanel';
 import { Logger } from './utils/logger';
 import { forceStopHttpServer } from './server/httpServer';
 import { forceStopWsServer } from './server/wsServer';
@@ -104,6 +105,13 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('jupyterLiveShare.openViewer', () =>
       ViewerPanel.createOrShow(context)
+    )
+  );
+
+  // Teacher Preview Panel (선생님 판서용)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jupyterLiveShare.openTeacherPreview', () =>
+      TeacherPreviewPanel.createOrShow(context)
     )
   );
 }

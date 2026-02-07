@@ -22,7 +22,8 @@
 
   // Chat/Poll state
   let myNickname = '';
-  let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__;
+  const isTeacherPreview = !!window.__TEACHER_PREVIEW__;
   let chatVisible = false;
   let unreadCount = 0;
   let currentPollId = null;
@@ -95,8 +96,9 @@
       nameInput.value = savedName;
     }
 
-    // Connect WebSocket
-    WsClient.connect(handleMessage, handleStatus, null);
+    // Connect WebSocket (teacher preview joins as teacherPanel to avoid viewerCount increment)
+    const joinData = isTeacherPreview ? { teacherPanel: true } : undefined;
+    WsClient.connect(handleMessage, handleStatus, null, joinData);
 
     // Event listeners
     themeToggle.addEventListener('click', toggleTheme);
@@ -141,6 +143,9 @@
     pollQuestionInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submitNewPoll();
     });
+
+    // Drawing module initialization
+    Drawing.init(isTeacherPreview);
   }
 
   // === Name Flow ===
@@ -267,6 +272,30 @@
 
       case 'poll:end':
         handlePollEnd(msg.data);
+        break;
+
+      // Drawing events
+      // Teacher preview skips only draw:stroke and draw:stroking (already rendered locally).
+      // draw:undo/erase/clear are allowed through — they are idempotent when already
+      // processed locally, but critical for server-initiated clears (file switch, cells:structure).
+      // draw:full is always processed (reconnection sync).
+      case 'draw:stroke':
+        if (!isTeacherPreview) Drawing.receiveStroke(msg.data);
+        break;
+      case 'draw:stroking':
+        if (!isTeacherPreview) Drawing.receiveStroking(msg.data);
+        break;
+      case 'draw:undo':
+        Drawing.receiveUndo(msg.data);
+        break;
+      case 'draw:erase':
+        Drawing.receiveErase(msg.data);
+        break;
+      case 'draw:clear':
+        Drawing.receiveClear();
+        break;
+      case 'draw:full':
+        Drawing.receiveFull(msg.data);
         break;
 
       default:

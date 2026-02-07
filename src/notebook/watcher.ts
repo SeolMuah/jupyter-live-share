@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { broadcast, sendTo, setOnNewViewer, getCurrentPollState } from '../server/wsServer';
+import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns } from '../utils/imageResolver';
@@ -184,6 +184,10 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
   resolveNotebookImages(serialized, baseDir);
   broadcast('notebook:full', serialized);
 
+  // 파일 전환 시 판서 초기화
+  clearDrawStrokes();
+  broadcast('draw:clear', {});
+
   // Pre-optimize images in background using ORIGINAL text (not resolved data URIs)
   if (rawText) {
     preOptimizeImages(rawText, baseDir).catch((err) => {
@@ -215,6 +219,11 @@ function switchToTextDocument(document: vscode.TextDocument) {
   }
 
   broadcast('document:full', serialized);
+
+  // 파일 전환 시 판서 초기화
+  clearDrawStrokes();
+  broadcast('draw:clear', {});
+
   Logger.info(`Switched to text document: ${document.uri.path}`);
 }
 
@@ -291,6 +300,12 @@ function setupNewViewerHandler() {
         totalVoters: poll.totalVoters,
         ...(poll.options ? { options: poll.options } : {}),
       });
+    }
+
+    // 기존 판서 데이터가 있으면 새 접속자에게 전송
+    const strokes = getDrawStrokes();
+    if (strokes.length > 0) {
+      sendTo(ws, 'draw:full', { strokes });
     }
   });
 }
@@ -427,6 +442,9 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           removedCount: change.removedCells.length,
           addedCells,
         });
+        // 셀 구조 변경 시 판서 초기화
+        clearDrawStrokes();
+        broadcast('draw:clear', {});
         Logger.info(
           `Cells structure changed: ${change.addedCells.length} added, ${change.removedCells.length} removed`
         );

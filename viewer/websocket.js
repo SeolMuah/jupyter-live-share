@@ -7,6 +7,7 @@ const WsClient = (() => {
   let messageHandler = null;
   let statusHandler = null;
   let pin = null;
+  let extraJoinData = null;
 
   const MAX_RECONNECT_DELAY = 30000; // 30s max
 
@@ -16,10 +17,11 @@ const WsClient = (() => {
     return `${protocol}//${location.host}`;
   }
 
-  function connect(onMessage, onStatus, sessionPin) {
+  function connect(onMessage, onStatus, sessionPin, joinData) {
     messageHandler = onMessage;
     statusHandler = onStatus;
     pin = sessionPin;
+    extraJoinData = joinData || null;
 
     _doConnect();
   }
@@ -46,9 +48,11 @@ const WsClient = (() => {
       statusHandler?.('connected');
 
       // Send join event
+      const joinPayload = { pin: pin || undefined };
+      if (extraJoinData) Object.assign(joinPayload, extraJoinData);
       ws.send(JSON.stringify({
         type: 'join',
-        data: { pin: pin || undefined }
+        data: joinPayload
       }));
     };
 

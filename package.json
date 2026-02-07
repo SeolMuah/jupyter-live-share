@@ -19,7 +19,8 @@
   "activationEvents": [
     "onNotebook:jupyter-notebook",
     "onCommand:jupyterLiveShare.startSession",
-    "onCommand:jupyterLiveShare.openViewer"
+    "onCommand:jupyterLiveShare.openViewer",
+    "onCommand:jupyterLiveShare.openTeacherPreview"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -47,6 +48,11 @@
       {
         "command": "jupyterLiveShare.endPoll",
         "title": "End Poll",
+        "category": "Jupyter Live Share"
+      },
+      {
+        "command": "jupyterLiveShare.openTeacherPreview",
+        "title": "Open Teacher Preview",
         "category": "Jupyter Live Share"
       }
     ],

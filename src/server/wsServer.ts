@@ -44,6 +44,19 @@ let clientMeta: Map<WebSocket, ClientMeta> = new Map();
 let currentPoll: PollState | null = null;
 let chatMessageId = 0;
 
+interface DrawStroke {
+  strokeId: string;
+  tool: 'pen' | 'highlighter' | 'eraser';
+  color: string;
+  width: number;
+  alpha: number;
+  points: Array<{ xRatio: number; yAbsolute: number }>;
+}
+
+let drawStrokes: DrawStroke[] = [];
+const MAX_DRAW_STROKES = 500;
+const MAX_POINTS_PER_STROKE = 5000;
+
 // Rate limit constants
 const RATE_LIMIT_WINDOW = 10000; // 10 seconds
 const RATE_LIMIT_MAX = 5; // max 5 messages per window
@@ -82,6 +95,17 @@ export function getCurrentPollState(): PollStateReadonly | null {
 function isLocalAddress(address: string | undefined): boolean {
   if (!address) return false;
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function isValidDrawStroke(data: unknown): data is DrawStroke {
+  if (!data || typeof data !== 'object') return false;
+  const d = data as Record<string, unknown>;
+  if (typeof d.strokeId !== 'string' || !d.strokeId) return false;
+  if (!Array.isArray(d.points) || d.points.length === 0) return false;
+  if (d.points.length > MAX_POINTS_PER_STROKE) return false;
+  if (typeof d.color !== 'string') return false;
+  if (typeof d.width !== 'number' || d.width <= 0 || d.width > 100) return false;
+  return true;
 }
 
 function checkRateLimit(meta: ClientMeta): string | null {
@@ -343,6 +367,47 @@ export function startWsServer(
           endPoll();
           return;
         }
+
+        // Drawing events
+        if (msg.type === 'draw:stroke') {
+          if (!meta.isTeacher) return;
+          const stroke = msg.data as DrawStroke;
+          if (!isValidDrawStroke(stroke)) return;
+          // Enforce max strokes limit
+          if (drawStrokes.length >= MAX_DRAW_STROKES) {
+            drawStrokes.shift(); // remove oldest
+          }
+          drawStrokes.push(stroke);
+          broadcast('draw:stroke', msg.data);
+          return;
+        }
+        if (msg.type === 'draw:stroking') {
+          if (!meta.isTeacher) return;
+          broadcast('draw:stroking', msg.data);
+          return;
+        }
+        if (msg.type === 'draw:undo') {
+          if (!meta.isTeacher) return;
+          const removed = drawStrokes.pop();
+          if (removed) broadcast('draw:undo', { strokeId: removed.strokeId });
+          return;
+        }
+        if (msg.type === 'draw:erase') {
+          if (!meta.isTeacher) return;
+          const eraseData = msg.data as { strokeId: string };
+          const idx = drawStrokes.findIndex(s => s.strokeId === eraseData.strokeId);
+          if (idx !== -1) {
+            drawStrokes.splice(idx, 1);
+            broadcast('draw:erase', eraseData);
+          }
+          return;
+        }
+        if (msg.type === 'draw:clear') {
+          if (!meta.isTeacher) return;
+          drawStrokes = [];
+          broadcast('draw:clear', {});
+          return;
+        }
       } catch (err) {
         Logger.error('WebSocket message parse error', err);
       }
@@ -368,6 +433,9 @@ export function startWsServer(
   Logger.info('WebSocket server started');
   return wss;
 }
+
+export function getDrawStrokes(): DrawStroke[] { return [...drawStrokes]; }
+export function clearDrawStrokes(): void { drawStrokes = []; }
 
 let onNewViewer: ((ws: WebSocket) => void) | null = null;
 
@@ -401,6 +469,7 @@ export function stopWsServer(): Promise<void> {
     clientMeta.clear();
     currentPoll = null;
     chatMessageId = 0;
+    drawStrokes = [];
 
     if (!wss) {
       resolve();
@@ -436,6 +505,7 @@ export function forceStopWsServer(): void {
   clientMeta.clear();
   currentPoll = null;
   chatMessageId = 0;
+  drawStrokes = [];
 
   if (wss) {
     try {

@@ -1,98 +1,37 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
-import { ViewerChatPanelProvider } from './viewerChatPanel';
 
-export class ViewerPanel {
-  public static currentPanel: ViewerPanel | undefined;
-  private static readonly viewType = 'jupyterLiveShare.viewer';
-  private static chatPanel: ViewerChatPanelProvider | undefined;
+export class TeacherPreviewPanel {
+  public static currentPanel: TeacherPreviewPanel | undefined;
+  private static readonly viewType = 'jupyterLiveShare.teacherPreview';
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
   private disposables: vscode.Disposable[] = [];
-  private wsUrl: string;
 
-  /** ViewerChatPanelProvider 참조 설정 (extension.ts에서 호출) */
-  public static setChatPanel(provider: ViewerChatPanelProvider): void {
-    ViewerPanel.chatPanel = provider;
-  }
-
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, serverUrl: string) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this.panel = panel;
     this.extensionUri = extensionUri;
-    this.wsUrl = serverUrl;
 
-    // 메시지 핸들러를 HTML 설정 전에 등록
-    this.panel.webview.onDidReceiveMessage(
-      (msg) => this.handleWebviewMessage(msg),
-      null,
-      this.disposables
-    );
-
-    this.panel.webview.html = this.getHtmlContent(serverUrl);
+    const port = getConfig().port;
+    const wsUrl = `ws://localhost:${port}`;
+    this.panel.webview.html = this.getHtmlContent(wsUrl);
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-
-    // Viewer Chat 패널을 하단 패널에서 포커스
-    setTimeout(() => {
-      vscode.commands.executeCommand('jupyterLiveShare.viewerChatPanel.focus');
-    }, 300);
   }
 
-  private handleWebviewMessage(msg: { type: string; wsUrl?: string; nickname?: string; pin?: string }): void {
-    switch (msg.type) {
-      case 'authenticated':
-        // Viewer successfully authenticated — connect chat panel
-        if (ViewerPanel.chatPanel && msg.wsUrl) {
-          ViewerPanel.chatPanel.connect(msg.wsUrl, msg.pin);
-        }
-        break;
-      case 'nameSet':
-        // Student entered name — relay to chat panel
-        if (ViewerPanel.chatPanel && msg.nickname) {
-          ViewerPanel.chatPanel.setName(msg.nickname);
-        }
-        break;
-    }
-  }
-
-  public static async createOrShow(context: vscode.ExtensionContext) {
-    // URL 입력
-    const url = await vscode.window.showInputBox({
-      prompt: 'Enter the Live Share server URL',
-      placeHolder: 'https://xxx.trycloudflare.com',
-      validateInput: (value) => {
-        if (!value) return 'URL is required';
-        try {
-          new URL(value);
-          return undefined;
-        } catch {
-          return 'Invalid URL format (e.g., https://xxx.trycloudflare.com)';
-        }
-      },
-    });
-
-    if (!url) return; // ESC pressed
-
-    // WebSocket URL 변환: https→wss, http→ws
-    const wsUrl = url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
-
-    // 기존 패널이 있으면 재사용
-    if (ViewerPanel.currentPanel) {
-      ViewerPanel.currentPanel.panel.reveal(vscode.ViewColumn.Beside);
-      ViewerPanel.currentPanel.wsUrl = wsUrl;
-      ViewerPanel.currentPanel.panel.webview.html =
-        ViewerPanel.currentPanel.getHtmlContent(wsUrl);
-      // Disconnect old chat panel connection for fresh reconnect
-      ViewerPanel.chatPanel?.disconnect();
+  public static createOrShow(context: vscode.ExtensionContext) {
+    // Reuse existing panel
+    if (TeacherPreviewPanel.currentPanel) {
+      TeacherPreviewPanel.currentPanel.panel.reveal(vscode.ViewColumn.Beside);
       return;
     }
 
-    // 새 패널 생성
     const panel = vscode.window.createWebviewPanel(
-      ViewerPanel.viewType,
-      'Live Share Viewer',
+      TeacherPreviewPanel.viewType,
+      'Teacher Preview',
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
@@ -104,14 +43,12 @@ export class ViewerPanel {
       }
     );
 
-    ViewerPanel.currentPanel = new ViewerPanel(panel, context.extensionUri, wsUrl);
-    Logger.info(`Viewer panel opened for: ${url}`);
+    TeacherPreviewPanel.currentPanel = new TeacherPreviewPanel(panel, context.extensionUri);
+    Logger.info('Teacher preview panel opened');
   }
 
   private getHtmlContent(wsUrl: string): string {
     const webview = this.panel.webview;
-
-    // viewer 파일 URI 해석 (dist/viewer/)
     const viewerBase = vscode.Uri.joinPath(this.extensionUri, 'dist', 'viewer');
 
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'style.css'));
@@ -135,7 +72,7 @@ export class ViewerPanel {
     img-src ${webview.cspSource} data: https:;
     connect-src ws: wss: https: http:;
   ">
-  <title>Live Share Viewer</title>
+  <title>Teacher Preview</title>
   <link rel="stylesheet" href="${styleUri}">
   <!-- highlight.js -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css" id="hljs-light">
@@ -159,14 +96,15 @@ export class ViewerPanel {
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
   <!-- DOMPurify -->
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
-  <!-- VS Code Webview flag + WebSocket URL 주입 -->
+  <!-- Flags: VS Code Webview + Teacher Preview + WS URL -->
   <script nonce="${nonce}">
     window.__VSCODE_WEBVIEW__ = true;
+    window.__TEACHER_PREVIEW__ = true;
     window.__WS_URL__ = ${JSON.stringify(wsUrl)};
   </script>
 </head>
 <body>
-  <!-- PIN 입력 화면 -->
+  <!-- PIN/Name screens hidden for teacher preview -->
   <div id="pin-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
       <h2>Jupyter Live Share</h2>
@@ -177,7 +115,6 @@ export class ViewerPanel {
     </div>
   </div>
 
-  <!-- 이름 입력 화면 -->
   <div id="name-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
       <h2>Jupyter Live Share</h2>
@@ -187,12 +124,10 @@ export class ViewerPanel {
     </div>
   </div>
 
-  <!-- 연결 상태 -->
   <div id="connection-status" class="connection-status" style="display:none;">
     <span id="status-text">Connecting...</span>
   </div>
 
-  <!-- 헤더 -->
   <header id="header">
     <div class="header-left">
       <span id="file-name">Loading...</span>
@@ -203,9 +138,7 @@ export class ViewerPanel {
     </div>
   </header>
 
-  <!-- 노트북 컨텐츠 -->
   <main id="notebook-container">
-    <!-- 설문 배너 -->
     <div id="poll-banner" style="display:none;">
       <div class="poll-question" id="poll-question"></div>
       <div class="poll-buttons" id="poll-buttons"></div>
@@ -215,7 +148,6 @@ export class ViewerPanel {
     <div id="notebook-cells"></div>
   </main>
 
-  <!-- 채팅 패널 -->
   <aside id="chat-panel" class="chat-panel">
     <div class="chat-header">
       <span>Chat</span>
@@ -228,19 +160,30 @@ export class ViewerPanel {
     </div>
   </aside>
 
-  <!-- 설문 생성 모달 (선생님 전용) -->
   <div id="poll-modal" class="poll-modal-overlay" style="display:none;">
     <div class="poll-modal-box">
       <h3>Create Poll</h3>
       <label for="poll-question-input">Question:</label>
       <input type="text" id="poll-question-input" maxlength="200" placeholder="Enter your question">
-      <label for="poll-option-count">Number of options (2~5):</label>
-      <select id="poll-option-count">
-        <option value="2">2</option>
-        <option value="3">3</option>
-        <option value="4">4</option>
-        <option value="5" selected>5</option>
+      <label for="poll-mode-select">Mode:</label>
+      <select id="poll-mode-select">
+        <option value="number">Number (1, 2, 3...)</option>
+        <option value="text">Text (custom labels)</option>
       </select>
+      <div id="poll-number-mode">
+        <label for="poll-option-count">Number of options (2~5):</label>
+        <select id="poll-option-count">
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5" selected>5</option>
+        </select>
+      </div>
+      <div id="poll-text-mode" style="display:none;">
+        <label for="poll-text-options">Options (one per line):</label>
+        <textarea id="poll-text-options" rows="4" maxlength="500" placeholder="Yes&#10;No&#10;Maybe"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-cell);color:var(--text-primary);font-size:0.9rem;font-family:var(--font-sans);resize:vertical;"></textarea>
+      </div>
       <div class="poll-modal-actions">
         <button id="poll-modal-cancel">Cancel</button>
         <button id="poll-modal-start">Start Poll</button>
@@ -248,7 +191,30 @@ export class ViewerPanel {
     </div>
   </div>
 
-  <!-- 하단 툴바 -->
+  <!-- 판서 툴바 (선생님 프리뷰 전용) -->
+  <div id="draw-toolbar" style="display:none;">
+    <button id="draw-toggle" title="Toggle drawing mode">Draw</button>
+    <div class="draw-tools" style="display:none;">
+      <button class="tool-btn active" data-tool="pen">Pen</button>
+      <button class="tool-btn" data-tool="highlighter">Highlight</button>
+      <button class="tool-btn" data-tool="eraser">Eraser</button>
+      <span class="draw-separator"></span>
+      <button class="color-btn active" data-color="#ef4444" style="--btn-color:#ef4444;" title="Red"></button>
+      <button class="color-btn" data-color="#3b82f6" style="--btn-color:#3b82f6;" title="Blue"></button>
+      <button class="color-btn" data-color="#22c55e" style="--btn-color:#22c55e;" title="Green"></button>
+      <button class="color-btn" data-color="#eab308" style="--btn-color:#eab308;" title="Yellow"></button>
+      <button class="color-btn" data-color="#111111" style="--btn-color:#111111;" title="Black"></button>
+      <button class="color-btn" data-color="#ffffff" style="--btn-color:#ffffff;" title="White"></button>
+      <span class="draw-separator"></span>
+      <button class="width-btn" data-width="2" title="Thin">S</button>
+      <button class="width-btn active" data-width="4" title="Medium">M</button>
+      <button class="width-btn" data-width="8" title="Thick">L</button>
+      <span class="draw-separator"></span>
+      <button id="draw-undo" title="Undo last stroke">Undo</button>
+      <button id="draw-clear" title="Clear all drawings">Clear</button>
+    </div>
+  </div>
+
   <footer id="toolbar" style="display:none;">
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
@@ -268,11 +234,7 @@ export class ViewerPanel {
   }
 
   public dispose() {
-    ViewerPanel.currentPanel = undefined;
-
-    // Disconnect chat panel
-    ViewerPanel.chatPanel?.disconnect();
-
+    TeacherPreviewPanel.currentPanel = undefined;
     this.panel.dispose();
     while (this.disposables.length) {
       const d = this.disposables.pop();

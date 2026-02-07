@@ -11,6 +11,10 @@ import { Logger } from '../utils/logger';
 let tunnel: TunnelManager | null = null;
 let isRunning = false;
 
+export function getIsRunning(): boolean {
+  return isRunning;
+}
+
 /**
  * 터널을 동기적으로 강제 종료한다 (프로세스 exit 핸들러용)
  */

@@ -141,6 +141,30 @@
     </div>
   </div>
 
+  <!-- 판서 툴바 (선생님 프리뷰 전용) -->
+  <div id="draw-toolbar" style="display:none;">
+    <button id="draw-toggle" title="Toggle drawing mode">Draw</button>
+    <div class="draw-tools" style="display:none;">
+      <button class="tool-btn active" data-tool="pen">Pen</button>
+      <button class="tool-btn" data-tool="highlighter">Highlight</button>
+      <button class="tool-btn" data-tool="eraser">Eraser</button>
+      <span class="draw-separator"></span>
+      <button class="color-btn active" data-color="#ef4444" style="--btn-color:#ef4444;" title="Red"></button>
+      <button class="color-btn" data-color="#3b82f6" style="--btn-color:#3b82f6;" title="Blue"></button>
+      <button class="color-btn" data-color="#22c55e" style="--btn-color:#22c55e;" title="Green"></button>
+      <button class="color-btn" data-color="#eab308" style="--btn-color:#eab308;" title="Yellow"></button>
+      <button class="color-btn" data-color="#111111" style="--btn-color:#111111;" title="Black"></button>
+      <button class="color-btn" data-color="#ffffff" style="--btn-color:#ffffff;" title="White"></button>
+      <span class="draw-separator"></span>
+      <button class="width-btn" data-width="2" title="Thin">S</button>
+      <button class="width-btn active" data-width="4" title="Medium">M</button>
+      <button class="width-btn" data-width="8" title="Thick">L</button>
+      <span class="draw-separator"></span>
+      <button id="draw-undo" title="Undo last stroke">Undo</button>
+      <button id="draw-clear" title="Clear all drawings">Clear</button>
+    </div>
+  </div>
+
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
@@ -153,6 +177,7 @@
   </footer>
 
   <script src="renderer.js"></script>
+  <script src="drawing.js"></script>
   <script src="websocket.js"></script>
   <script src="viewer.js"></script>
 </body>
