@@ -27,6 +27,8 @@
   --chat-max-width: 600px;
   --resize-handle-width: 4px;
   --header-height: 40px;
+  --chat-header-bg: #f0f3f6;
+  --chat-header-text: #24292f;
 }
 
 /* === Dark Mode === */
@@ -50,6 +52,8 @@
   --header-text: #c9d1d9;
   --code-border: #21262d;
   --output-border: #78350f;
+  --chat-header-bg: #1c2128;
+  --chat-header-text: #c9d1d9;
 }
 
 /* === Reset === */
@@ -827,7 +831,8 @@ footer label {
   justify-content: space-between;
   align-items: center;
   padding: 0 14px;
-  background: var(--header-bg);
+  background: var(--chat-header-bg);
+  color: var(--chat-header-text);
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   min-height: var(--header-height);
@@ -840,11 +845,11 @@ footer label {
   gap: 8px;
   font-weight: 600;
   font-size: 0.88rem;
-  color: var(--header-text);
+  color: var(--chat-header-text);
 }
 
 .chat-header-title svg {
-  color: var(--header-text);
+  color: var(--chat-header-text);
   flex-shrink: 0;
   opacity: 0.8;
 }
@@ -858,7 +863,7 @@ footer label {
 .chat-collapse-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 4px;
   line-height: 1;
@@ -869,14 +874,14 @@ footer label {
 }
 
 .chat-collapse-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
 }
 
 .chat-close-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
   font-size: 1.4rem;
   cursor: pointer;
   padding: 2px 4px;
@@ -887,8 +892,8 @@ footer label {
 }
 
 .chat-close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
 }
 
 /* === Chat Floating Toggle (visible when chat is collapsed) === */
