@@ -16,6 +16,7 @@ const extensionConfig = {
     vscode: 'commonjs vscode',
     bufferutil: 'commonjs bufferutil',
     'utf-8-validate': 'commonjs utf-8-validate',
+    sharp: 'commonjs sharp',
   },
   resolve: {
     extensions: ['.ts', '.js'],

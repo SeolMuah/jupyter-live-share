@@ -462,6 +462,15 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       <input type="text" id="teacherName" value="Teacher" maxlength="30"
         style="width:100%; padding:5px 8px; font-size:12px; background:var(--vscode-input-background); color:var(--vscode-input-foreground); border:1px solid var(--vscode-input-border,var(--vscode-widget-border,transparent)); border-radius:3px; font-family:var(--vscode-font-family);" />
     </div>
+    <div style="margin-bottom:8px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:11px; cursor:pointer;">
+        <input type="checkbox" id="shareImages" checked />
+        로컬 이미지 공유
+      </label>
+      <div style="font-size:10px; color:var(--vscode-descriptionForeground); margin-left:20px;">
+        마크다운/HTML의 로컬 이미지를 학생에게 전송
+      </div>
+    </div>
     <button class="btn-primary" id="btnStart">Start Session</button>
   </div>
 
@@ -567,6 +576,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       const btnSend = document.getElementById('btnSend');
       const copiedToast = document.getElementById('copiedToast');
       const teacherNameInput = document.getElementById('teacherName');
+      const shareImagesCheckbox = document.getElementById('shareImages');
 
       let ws = null;
       let currentState = { isRunning: false, viewerCount: 0 };
@@ -597,7 +607,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       // Button handlers
       btnStart.addEventListener('click', () => {
         const tName = (teacherNameInput.value || '').trim() || 'Teacher';
-        vscode.postMessage({ type: 'command', command: 'startSession', data: { teacherName: tName } });
+        const shareImages = shareImagesCheckbox ? shareImagesCheckbox.checked : true;
+        vscode.postMessage({ type: 'command', command: 'startSession', data: { teacherName: tName, shareImages } });
       });
 
       btnStop.addEventListener('click', () => {

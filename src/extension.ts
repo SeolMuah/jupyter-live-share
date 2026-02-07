@@ -58,10 +58,10 @@ export function activate(context: vscode.ExtensionContext) {
   sessionViewProvider.setOnCommand((command, data) => {
     switch (command) {
       case 'startSession': {
-        const teacherName = (data && typeof data === 'object' && 'teacherName' in data)
-          ? String((data as { teacherName: string }).teacherName)
-          : undefined;
-        startSession(context, statusBarManager!, sessionViewProvider, teacherName);
+        const d = data as { teacherName?: string; shareImages?: boolean } | undefined;
+        const teacherName = d?.teacherName ? String(d.teacherName) : undefined;
+        const shareImages = d?.shareImages !== false;
+        startSession(context, statusBarManager!, sessionViewProvider, teacherName, shareImages);
         break;
       }
       case 'stopSession':

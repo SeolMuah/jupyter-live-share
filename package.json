@@ -71,6 +71,16 @@
           ],
           "default": "cloudflare",
           "description": "Tunnel provider for external access"
+        },
+        "jupyterLiveShare.imageMaxWidth": {
+          "type": "number",
+          "default": 1280,
+          "description": "Maximum image width in pixels for optimization (default: 1280)"
+        },
+        "jupyterLiveShare.imageMaxSizeKB": {
+          "type": "number",
+          "default": 2048,
+          "description": "Maximum image size in KB after optimization (default: 2048)"
         }
       }
     },
@@ -117,6 +127,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.0",
+    "@types/sharp": "^0.31.1",
     "@types/vscode": "^1.82.0",
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -132,6 +143,7 @@
   },
   "dependencies": {
     "express": "^4.18.2",
+    "sharp": "^0.34.5",
     "ws": "^8.16.0"
   }
 }

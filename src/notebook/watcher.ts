@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { broadcast, sendTo, setOnNewViewer, getCurrentPollState } from '../server/wsServer';
-import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument } from './serializer';
+import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
+import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
 const CELL_DEBOUNCE_MS = 50; // 빠른 글자 동기화 (150→50)
@@ -9,6 +11,9 @@ const TEXT_DEBOUNCE_MS = 100;
 const THROTTLE_MS = 100; // 셀 포커스 추적 반응성 개선 (200→100)
 const CURSOR_THROTTLE_MS = 30; // Cursor updates need fastest response (50→30)
 const VIEWPORT_THROTTLE_MS = 100; // Viewport sync needs fast but not excessive updates
+
+// languageIds where image resolution is relevant
+const IMAGE_RELEVANT_LANGUAGES = new Set(['markdown', 'html', 'jupyter']);
 
 let disposables: vscode.Disposable[] = [];
 let debounceTimers: Map<number, NodeJS.Timeout> = new Map();
@@ -22,6 +27,117 @@ let lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
+let imageShareEnabled = true;
+
+export function setImageShareEnabled(enabled: boolean) {
+  imageShareEnabled = enabled;
+}
+
+/**
+ * Get the base directory for the current file (for resolving relative image paths)
+ */
+function getBaseDir(): string {
+  if (currentNotebook) {
+    return path.dirname(currentNotebook.uri.fsPath);
+  }
+  if (currentTextDocument) {
+    return path.dirname(currentTextDocument.uri.fsPath);
+  }
+  return '';
+}
+
+/**
+ * Check if the current plaintext document's language supports image references.
+ */
+function isImageRelevantTextDocument(): boolean {
+  if (!currentTextDocument) return false;
+  return IMAGE_RELEVANT_LANGUAGES.has(currentTextDocument.languageId);
+}
+
+/**
+ * Resolve local images in a serialized notebook's markup cells and HTML outputs.
+ * Modifies the serialized object in place.
+ * Uses full resolution (cache + disk I/O) for initial sync events.
+ */
+function resolveNotebookImages(serialized: SerializedNotebook, baseDir: string): void {
+  if (!imageShareEnabled || !baseDir) return;
+  for (const cell of serialized.cells) {
+    if (cell.kind === 'markup') {
+      cell.source = resolveLocalImages(cell.source, baseDir);
+    }
+    for (const output of cell.outputs) {
+      for (const item of output.items) {
+        if (item.mime === 'text/html') {
+          item.data = resolveLocalImages(item.data, baseDir);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Resolve local images in serialized cells (for cells:structure addedCells).
+ * Modifies the cells array in place.
+ */
+function resolveAddedCellImages(cells: SerializedCell[], baseDir: string): void {
+  if (!imageShareEnabled || !baseDir) return;
+  for (const cell of cells) {
+    if (cell.kind === 'markup') {
+      cell.source = resolveLocalImages(cell.source, baseDir);
+    }
+    for (const output of cell.outputs) {
+      for (const item of output.items) {
+        if (item.mime === 'text/html') {
+          item.data = resolveLocalImages(item.data, baseDir);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Resolve local images in text content for full-sync events (document:full).
+ * Uses full resolution (cache + disk I/O).
+ */
+function resolveTextImagesFull(content: string, baseDir: string): string {
+  if (!imageShareEnabled || !baseDir) return content;
+  return resolveLocalImages(content, baseDir);
+}
+
+/**
+ * Resolve local images in text content for real-time typing events.
+ * Uses cache-only mode to avoid blocking disk I/O during typing.
+ */
+function resolveTextImagesRealtime(content: string, baseDir: string): string {
+  if (!imageShareEnabled || !baseDir) return content;
+  return resolveLocalImagesCacheOnly(content, baseDir);
+}
+
+/**
+ * Collect raw source texts from a notebook for preOptimizeImages.
+ * Must be called BEFORE resolveNotebookImages (needs original local paths).
+ */
+function collectNotebookRawText(notebook: vscode.NotebookDocument): string {
+  const parts: string[] = [];
+  for (let i = 0; i < notebook.cellCount; i++) {
+    const cell = notebook.cellAt(i);
+    if (cell.kind === vscode.NotebookCellKind.Markup) {
+      parts.push(cell.document.getText());
+    }
+    // Also scan HTML outputs for local image references
+    for (const output of cell.outputs) {
+      for (const item of output.items) {
+        if (item.mime === 'text/html') {
+          const html = new TextDecoder().decode(item.data);
+          if (hasImagePatterns(html)) {
+            parts.push(html);
+          }
+        }
+      }
+    }
+  }
+  return parts.join('\n');
+}
 
 /**
  * Clear all pending timers and reset state on file switch.
@@ -59,7 +175,21 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
   startWatchingNotebook(notebook);
   const editor = vscode.window.activeNotebookEditor;
   const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
-  broadcast('notebook:full', serializeNotebook(notebook, activeCellIndex));
+
+  // Collect raw text BEFORE image resolution for background pre-optimization
+  const baseDir = getBaseDir();
+  const rawText = imageShareEnabled ? collectNotebookRawText(notebook) : '';
+
+  const serialized = serializeNotebook(notebook, activeCellIndex);
+  resolveNotebookImages(serialized, baseDir);
+  broadcast('notebook:full', serialized);
+
+  // Pre-optimize images in background using ORIGINAL text (not resolved data URIs)
+  if (rawText) {
+    preOptimizeImages(rawText, baseDir).catch((err) => {
+      Logger.warn(`Background image pre-optimization failed: ${err}`);
+    });
+  }
   Logger.info(`Switched to notebook: ${notebook.uri.path}`);
 }
 
@@ -71,7 +201,20 @@ function switchToTextDocument(document: vscode.TextDocument) {
   for (const d of disposables) { d.dispose(); }
   disposables = [];
   startWatchingTextDocument(document);
-  broadcast('document:full', serializeTextDocument(document));
+
+  const serialized = serializeTextDocument(document);
+  const baseDir = getBaseDir();
+
+  // Pre-optimize using original content, then resolve for broadcast
+  const originalContent = serialized.content;
+  if (isImageRelevantTextDocument()) {
+    serialized.content = resolveTextImagesFull(serialized.content, baseDir);
+    preOptimizeImages(originalContent, baseDir).catch((err) => {
+      Logger.warn(`Background image pre-optimization failed: ${err}`);
+    });
+  }
+
+  broadcast('document:full', serialized);
   Logger.info(`Switched to text document: ${document.uri.path}`);
 }
 
@@ -121,10 +264,14 @@ function setupNewViewerHandler() {
       const editor = vscode.window.activeNotebookEditor;
       const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
       const serialized = serializeNotebook(currentNotebook, activeCellIndex);
+      resolveNotebookImages(serialized, getBaseDir());
       sendTo(ws, 'notebook:full', serialized);
       // 노트북 모드: viewport:sync 전송하지 않음 (cursor:position이 스크롤 담당)
     } else if (watchMode === 'plaintext' && currentTextDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
+      if (isImageRelevantTextDocument()) {
+        serialized.content = resolveTextImagesFull(serialized.content, getBaseDir());
+      }
       sendTo(ws, 'document:full', serialized);
       // plaintext 모드: viewport:sync 전송하지 않음 (커서 클릭/드래그만 동기화)
     }
@@ -237,13 +384,29 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
 
           Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${newSource.length} first20="${newSource.substring(0, 20)}"`);
           lastSentSources.set(cellIndex, newSource);
-          broadcast('cell:update', { index: cellIndex, source: newSource });
+          // Resolve images in markup cells (cache-only for real-time typing)
+          const isMarkup = change.cell.kind === vscode.NotebookCellKind.Markup;
+          const resolvedSource = (imageShareEnabled && isMarkup)
+            ? resolveLocalImagesCacheOnly(newSource, getBaseDir())
+            : newSource;
+          broadcast('cell:update', { index: cellIndex, source: resolvedSource });
         }
 
         if (change.outputs) {
           // 셀 실행 결과 변경 → 즉시 전송 (debounce 없음)
           const cellIndex = change.cell.index;
           const outputs = serializeOutputs(change.outputs);
+          // Resolve images in HTML output items (full resolution — outputs are infrequent)
+          if (imageShareEnabled) {
+            const bd = getBaseDir();
+            for (const output of outputs) {
+              for (const item of output.items) {
+                if (item.mime === 'text/html') {
+                  item.data = resolveLocalImages(item.data, bd);
+                }
+              }
+            }
+          }
           broadcast('cell:output', {
             index: cellIndex,
             outputs,
@@ -255,11 +418,14 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
 
       // 셀 구조 변경 (추가/삭제)
       for (const change of event.contentChanges) {
+        const addedCells = change.addedCells.map(serializeCell);
+        // Resolve images in newly added cells
+        resolveAddedCellImages(addedCells, getBaseDir());
         broadcast('cells:structure', {
           type: change.removedCells.length > 0 ? 'delete' : 'insert',
           index: change.range.start,
           removedCount: change.removedCells.length,
-          addedCells: change.addedCells.map(serializeCell),
+          addedCells,
         });
         Logger.info(
           `Cells structure changed: ${change.addedCells.length} added, ${change.removedCells.length} removed`
@@ -285,7 +451,12 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
                 const pendingCell = currentNotebook.cellAt(idx);
                 const pendingText = pendingCell.document.getText();
                 lastSentSources.set(idx, pendingText);
-                broadcast('cell:update', { index: idx, source: pendingText });
+                // Resolve images in markup cells during flush
+                const isMarkup = pendingCell.kind === vscode.NotebookCellKind.Markup;
+                const resolvedText = (imageShareEnabled && isMarkup)
+                  ? resolveLocalImagesCacheOnly(pendingText, getBaseDir())
+                  : pendingText;
+                broadcast('cell:update', { index: idx, source: resolvedText });
               }
               debounceTimers.delete(idx);
             }
@@ -370,7 +541,12 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
         if (currentText !== lastSent) {
           lastSentSources.set(capturedCellIndex, currentText);
           Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
-          broadcast('cell:update', { index: capturedCellIndex, source: currentText });
+          // Resolve images in markup cells (cache-only for real-time)
+          const isMarkupCell = cell.kind === vscode.NotebookCellKind.Markup;
+          const resolvedText = (imageShareEnabled && isMarkupCell)
+            ? resolveLocalImagesCacheOnly(currentText, getBaseDir())
+            : currentText;
+          broadcast('cell:update', { index: capturedCellIndex, source: resolvedText });
         }
       }, 50);
 
@@ -462,7 +638,12 @@ function setupTextDocumentWatcher() {
     // debounce
     if (textDebounceTimer) clearTimeout(textDebounceTimer);
     textDebounceTimer = setTimeout(() => {
-      broadcast('document:update', { content: event.document.getText() });
+      let content = event.document.getText();
+      // Only resolve images for markdown/html documents (cache-only for real-time typing)
+      if (isImageRelevantTextDocument()) {
+        content = resolveTextImagesRealtime(content, getBaseDir());
+      }
+      broadcast('document:update', { content });
       textDebounceTimer = null;
     }, TEXT_DEBOUNCE_MS);
   });
@@ -689,6 +870,7 @@ export function stopWatching() {
   }
 
   lastSentSources.clear();
+  clearImageCache();
   currentNotebook = null;
   currentTextDocument = null;
   watchMode = null;

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { startHttpServer, stopHttpServer, getServer } from '../server/httpServer';
 import { startWsServer, stopWsServer, setSessionPin, setOnViewerCountChange, setTeacherName } from '../server/wsServer';
 import { TunnelManager } from '../server/tunnel';
-import { startWatching, stopWatching } from '../notebook/watcher';
+import { startWatching, stopWatching, setImageShareEnabled } from '../notebook/watcher';
 import { StatusBarManager } from './statusBar';
 import { SessionViewProvider } from './sidebarView';
 import { getConfig } from '../utils/config';
@@ -25,7 +25,8 @@ export async function startSession(
   context: vscode.ExtensionContext,
   statusBar: StatusBarManager,
   sidebarView?: SessionViewProvider,
-  teacherNameParam?: string
+  teacherNameParam?: string,
+  shareImages?: boolean
 ) {
   if (isRunning) {
     vscode.window.showWarningMessage('Jupyter Live Share session is already running.');
@@ -66,6 +67,7 @@ export async function startSession(
 
         // 3. 파일 변경 감시 시작
         progress.report({ message: 'Setting up file watcher...' });
+        setImageShareEnabled(shareImages !== false);
         startWatching();
 
         // 4. 터널 시작 (설정에 따라)
