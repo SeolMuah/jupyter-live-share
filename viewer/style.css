@@ -210,16 +210,16 @@ header {
 
 /* === Chat Resize Handle === */
 #chat-resize-handle {
-  width: var(--resize-handle-width);
+  width: 0;
   cursor: col-resize;
   background: transparent;
   flex-shrink: 0;
-  transition: background 0.15s;
-  display: none;
+  transition: width 0.2s ease-out, background 0.15s;
+  overflow: hidden;
 }
 
 #chat-resize-handle.visible {
-  display: block;
+  width: var(--resize-handle-width);
 }
 
 #chat-resize-handle:hover,
@@ -787,7 +787,7 @@ footer label {
 .chat-panel {
   position: sticky;
   top: var(--header-height);
-  height: calc(100vh - var(--header-height));
+  height: calc(100vh - var(--header-height) - var(--footer-height));
   width: var(--chat-width);
   flex-shrink: 0;
   background: var(--bg-primary);
@@ -796,6 +796,8 @@ footer label {
   flex-direction: column;
   z-index: 200;
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  transition: width 0.2s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out;
 }
 
 [data-theme="dark"] .chat-panel {
@@ -803,17 +805,21 @@ footer label {
 }
 
 .chat-panel.collapsed {
-  display: none;
+  width: 0;
+  border-left-color: transparent;
+  box-shadow: none;
 }
 
 .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
-  background: var(--bg-secondary);
+  padding: 0 14px;
+  background: var(--header-bg);
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  min-height: var(--header-height);
+  min-width: var(--chat-width);
 }
 
 .chat-header-title {
@@ -822,12 +828,13 @@ footer label {
   gap: 8px;
   font-weight: 600;
   font-size: 0.88rem;
-  color: var(--text-primary);
+  color: var(--header-text);
 }
 
 .chat-header-title svg {
-  color: var(--accent);
+  color: var(--header-text);
   flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .chat-header-actions {
@@ -839,7 +846,7 @@ footer label {
 .chat-collapse-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: rgba(255, 255, 255, 0.6);
   cursor: pointer;
   padding: 4px;
   line-height: 1;
@@ -850,14 +857,14 @@ footer label {
 }
 
 .chat-collapse-btn:hover {
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .chat-close-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: rgba(255, 255, 255, 0.6);
   font-size: 1.4rem;
   cursor: pointer;
   padding: 2px 4px;
@@ -868,8 +875,8 @@ footer label {
 }
 
 .chat-close-btn:hover {
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 /* === Chat Floating Toggle (visible when chat is collapsed) === */
@@ -945,6 +952,7 @@ footer label {
   overflow-y: auto;
   padding: 10px 14px;
   background: var(--bg-primary);
+  min-width: var(--chat-width);
 }
 
 .chat-msg {
@@ -1029,6 +1037,8 @@ footer label {
   background: var(--bg-secondary);
   flex-shrink: 0;
   align-items: center;
+  min-width: var(--chat-width);
+  min-height: var(--footer-height);
 }
 
 .chat-input-area input {
@@ -1335,11 +1345,13 @@ footer label {
     width: 100%;
     height: 100%;
     transition: right 0.3s ease;
+    overflow: visible;
   }
 
   .chat-panel.collapsed {
-    display: flex; /* override desktop display:none, use right for animation */
+    width: 100%; /* override desktop width:0 */
     right: -100%;
+    border-left-color: var(--border-color);
   }
 
   .chat-panel.open {
@@ -1352,6 +1364,12 @@ footer label {
 
   .chat-close-btn {
     display: block;
+  }
+
+  .chat-header,
+  .chat-messages,
+  .chat-input-area {
+    min-width: 0; /* override desktop min-width for narrow mobile screens */
   }
 
   .chat-float-toggle {

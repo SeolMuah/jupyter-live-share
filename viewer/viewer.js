@@ -138,9 +138,19 @@
     // Chat: default open on desktop (unless VS Code Webview)
     if (!isVSCodeWebview) {
       const isMobile = window.innerWidth <= 768;
-      const savedChatState = localStorage.getItem('jls-chat-open');
-      if (!isMobile && savedChatState !== 'false') {
-        toggleChat(true);
+      if (!isMobile) {
+        const savedChatState = localStorage.getItem('jls-chat-open');
+        const shouldOpen = savedChatState !== 'false';
+        // Disable transition for initial state setup (no animation on page load)
+        if (chatPanel) chatPanel.style.transition = 'none';
+        if (chatResizeHandle) chatResizeHandle.style.transition = 'none';
+        toggleChat(shouldOpen);
+        // Force reflow then re-enable transitions
+        if (chatPanel) {
+          chatPanel.offsetHeight;
+          chatPanel.style.transition = '';
+        }
+        if (chatResizeHandle) chatResizeHandle.style.transition = '';
       }
     }
 
