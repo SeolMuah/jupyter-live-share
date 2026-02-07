@@ -47,6 +47,15 @@ export class TeacherPreviewPanel {
     Logger.info('Teacher preview panel opened');
   }
 
+  public static reload(): void {
+    if (TeacherPreviewPanel.currentPanel) {
+      const port = getConfig().port;
+      const wsUrl = `ws://localhost:${port}`;
+      TeacherPreviewPanel.currentPanel.panel.webview.html =
+        TeacherPreviewPanel.currentPanel.getHtmlContent(wsUrl);
+    }
+  }
+
   private getHtmlContent(wsUrl: string): string {
     const webview = this.panel.webview;
     const viewerBase = vscode.Uri.joinPath(this.extensionUri, 'dist', 'viewer');

@@ -5,6 +5,7 @@ import { TunnelManager } from '../server/tunnel';
 import { startWatching, stopWatching, setImageShareEnabled } from '../notebook/watcher';
 import { StatusBarManager } from './statusBar';
 import { SessionViewProvider } from './sidebarView';
+import { TeacherPreviewPanel } from './teacherPreviewPanel';
 import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
 
@@ -77,7 +78,6 @@ export async function startSession(
         // 4. 터널 시작 (설정에 따라)
         let tunnelUrl = `http://localhost:${config.port}`;
 
-        // 4-1. 터널 상태를 사이드바에 표시하기 위해 먼저 세션 UI 시작
         isRunning = true;
         let fileName: string;
         if (isNotebook) {
@@ -91,23 +91,11 @@ export async function startSession(
         let tunnelStatus: string | undefined;
 
         if (config.tunnelProvider === 'cloudflare') {
-          // 사이드바를 먼저 표시 (터널 연결 중 상태)
-          sidebarView?.updateState({
-            isRunning: true,
-            url: `http://localhost:${config.port}`,
-            port: config.port,
-            pin: pin || undefined,
-            viewerCount: 0,
-            fileName,
-            tunnelStatus: 'Tunnel connecting...',
-          });
-
           progress.report({ message: 'Creating tunnel (this may take a few seconds)...' });
           tunnel = new TunnelManager(context.extensionPath);
           try {
             tunnelUrl = await tunnel.start(config.port, (msg) => {
               progress.report({ message: msg });
-              sidebarView?.updateState({ tunnelStatus: msg });
             });
             tunnelStatus = undefined; // 성공 시 상태 메시지 제거
           } catch (err) {
@@ -130,6 +118,9 @@ export async function startSession(
           fileName,
           tunnelStatus,
         });
+
+        // Teacher Preview 패널이 열려있으면 새 세션으로 즉시 갱신
+        TeacherPreviewPanel.reload();
 
         // URL 클립보드 복사
         await vscode.env.clipboard.writeText(tunnelUrl);
