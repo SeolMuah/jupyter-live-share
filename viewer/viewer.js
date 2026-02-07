@@ -57,6 +57,9 @@
   const chatClose = document.getElementById('chat-close');
   const chatCollapse = document.getElementById('chat-collapse');
   const chatResizeHandle = document.getElementById('chat-resize-handle');
+  const chatFloatToggle = document.getElementById('chat-float-toggle');
+  const chatFloatBadge = document.getElementById('chat-float-badge');
+  const chatEmptyState = document.getElementById('chat-empty-state');
   const btnChat = document.getElementById('btn-chat');
 
   // Poll elements
@@ -123,6 +126,7 @@
     });
     chatClose?.addEventListener('click', () => toggleChat(false));
     chatCollapse?.addEventListener('click', () => toggleChat(false));
+    chatFloatToggle?.addEventListener('click', () => toggleChat(true));
     btnChat?.addEventListener('click', () => toggleChat(!chatVisible));
 
     // Chat: restore saved width
@@ -549,9 +553,17 @@
 
   // === Chat ===
 
+  function hideChatEmptyState() {
+    if (chatEmptyState && chatEmptyState.parentNode) {
+      chatEmptyState.remove();
+    }
+  }
+
   function handleChatBroadcast(data) {
     // VS Code mode: chat handled by separate Viewer Chat panel
     if (isVSCodeWebview) return;
+
+    hideChatEmptyState();
 
     const msgEl = document.createElement('div');
     msgEl.className = 'chat-msg' + (data.isTeacher ? ' teacher-msg' : '');
@@ -632,9 +644,11 @@
       if (chatVisible) {
         chatPanel.classList.remove('collapsed');
         if (chatResizeHandle) chatResizeHandle.classList.add('visible');
+        if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
       } else {
         chatPanel.classList.add('collapsed');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
+        if (chatFloatToggle) chatFloatToggle.classList.add('visible');
       }
     }
 
@@ -653,16 +667,26 @@
   }
 
   function updateChatBadge() {
-    if (!btnChat) return;
-    // Remove existing badge
-    const existing = btnChat.querySelector('.chat-badge');
-    if (existing) existing.remove();
+    // Footer toolbar badge
+    if (btnChat) {
+      const existing = btnChat.querySelector('.chat-badge');
+      if (existing) existing.remove();
+      if (unreadCount > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'chat-badge';
+        badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+        btnChat.appendChild(badge);
+      }
+    }
 
-    if (unreadCount > 0) {
-      const badge = document.createElement('span');
-      badge.className = 'chat-badge';
-      badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
-      btnChat.appendChild(badge);
+    // Floating toggle badge
+    if (chatFloatBadge) {
+      if (unreadCount > 0) {
+        chatFloatBadge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+        chatFloatBadge.style.display = '';
+      } else {
+        chatFloatBadge.style.display = 'none';
+      }
     }
   }
 
@@ -704,6 +728,7 @@
     if (existingCard) return;
 
     // Create poll card in chat messages
+    hideChatEmptyState();
     const card = document.createElement('div');
     card.className = 'chat-poll-card';
     card.id = 'poll-card-' + data.pollId;
@@ -1030,6 +1055,7 @@
         // Switching to mobile: remove desktop classes, apply mobile classes
         chatPanel.classList.remove('collapsed');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
+        if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         if (!chatVisible) {
           chatPanel.classList.remove('open');
         } else {
@@ -1041,8 +1067,10 @@
         if (chatVisible) {
           chatPanel.classList.remove('collapsed');
           if (chatResizeHandle) chatResizeHandle.classList.add('visible');
+          if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         } else {
           chatPanel.classList.add('collapsed');
+          if (chatFloatToggle) chatFloatToggle.classList.add('visible');
         }
       }
     }

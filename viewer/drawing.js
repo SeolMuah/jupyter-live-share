@@ -112,6 +112,13 @@ const Drawing = (() => {
 
   // --- Canvas Setup ---
 
+  function createCtx(cvs) {
+    // Note: desynchronized:true is intentionally NOT used here.
+    // It silently breaks rendering in Electron/Webview sandboxed iframes
+    // (VS Code Teacher Preview) — returns a non-null context that draws nothing.
+    return cvs.getContext('2d');
+  }
+
   function init(isTeacherPreview) {
     isTeacher = isTeacherPreview;
     container = document.getElementById('notebook-container');
@@ -132,13 +139,13 @@ const Drawing = (() => {
     staticCanvas = document.createElement('canvas');
     staticCanvas.id = 'draw-canvas-static';
     container.appendChild(staticCanvas);
-    staticCtx = staticCanvas.getContext('2d', { desynchronized: true });
+    staticCtx = createCtx(staticCanvas);
 
     // Create active canvas (current stroke + events, top layer)
     canvas = document.createElement('canvas');
     canvas.id = 'draw-canvas';
     container.appendChild(canvas);
-    ctx = canvas.getContext('2d', { desynchronized: true });
+    ctx = createCtx(canvas);
 
     resizeCanvas();
 
@@ -167,6 +174,7 @@ const Drawing = (() => {
 
   function resizeCanvas() {
     if (!canvas || !staticCanvas || !container) return;
+    if (!staticCtx || !ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const w = container.clientWidth;
     const h = container.scrollHeight;
@@ -200,7 +208,7 @@ const Drawing = (() => {
           updateCanvasCursor();
         } else {
           canvas.style.touchAction = '';
-          canvas.classList.remove('cursor-pen', 'cursor-eraser');
+          canvas.classList.remove('cursor-pen', 'cursor-highlighter', 'cursor-eraser');
           canvas.style.cursor = '';
         }
       });
@@ -266,9 +274,11 @@ const Drawing = (() => {
   function updateCanvasCursor() {
     if (!canvas) return;
     canvas.style.cursor = '';
-    canvas.classList.remove('cursor-pen', 'cursor-eraser');
+    canvas.classList.remove('cursor-pen', 'cursor-highlighter', 'cursor-eraser');
     if (currentTool === 'eraser') {
       canvas.classList.add('cursor-eraser');
+    } else if (currentTool === 'highlighter') {
+      canvas.classList.add('cursor-highlighter');
     } else {
       canvas.classList.add('cursor-pen');
     }
@@ -304,12 +314,14 @@ const Drawing = (() => {
     currentPoints = [pt];
 
     // Draw initial dot on active canvas
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = currentColor;
-    ctx.beginPath();
-    ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    if (ctx) {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = currentColor;
+      ctx.beginPath();
+      ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
 
     // Start batch timer for WS sending
     batchTimer = setInterval(() => {
@@ -461,7 +473,7 @@ const Drawing = (() => {
     drawSmoothStroke(staticCtx, currentStroke, cw, positions);
 
     // Clear active canvas
-    ctx.clearRect(0, 0, cw, container.scrollHeight);
+    if (ctx) ctx.clearRect(0, 0, cw, container.scrollHeight);
 
     WsClient.send('draw:stroke', currentStroke);
 
