@@ -369,7 +369,7 @@ export function startWsServer(
           return;
         }
 
-        // Drawing events
+        // Drawing events — exclude sender to avoid echo
         if (msg.type === 'draw:stroke') {
           if (!meta.isTeacher) return;
           const stroke = msg.data as DrawStroke;
@@ -379,20 +379,20 @@ export function startWsServer(
             drawStrokes.shift(); // remove oldest
           }
           drawStrokes.push(stroke);
-          broadcast('draw:stroke', msg.data);
+          broadcastExclude(ws, 'draw:stroke', msg.data);
           return;
         }
         if (msg.type === 'draw:stroking') {
           if (!meta.isTeacher) return;
           const sd = msg.data as Record<string, unknown>;
           if (!sd || !Array.isArray(sd.points) || sd.points.length > 200) return;
-          broadcast('draw:stroking', msg.data);
+          broadcastExclude(ws, 'draw:stroking', msg.data);
           return;
         }
         if (msg.type === 'draw:undo') {
           if (!meta.isTeacher) return;
           const removed = drawStrokes.pop();
-          if (removed) broadcast('draw:undo', { strokeId: removed.strokeId });
+          if (removed) broadcastExclude(ws, 'draw:undo', { strokeId: removed.strokeId });
           return;
         }
         if (msg.type === 'draw:erase') {
@@ -401,14 +401,14 @@ export function startWsServer(
           const idx = drawStrokes.findIndex(s => s.strokeId === eraseData.strokeId);
           if (idx !== -1) {
             drawStrokes.splice(idx, 1);
-            broadcast('draw:erase', eraseData);
+            broadcastExclude(ws, 'draw:erase', eraseData);
           }
           return;
         }
         if (msg.type === 'draw:clear') {
           if (!meta.isTeacher) return;
           drawStrokes = [];
-          broadcast('draw:clear', {});
+          broadcastExclude(ws, 'draw:clear', {});
           return;
         }
 
@@ -471,6 +471,18 @@ export function broadcast(type: string, data: unknown) {
 
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+function broadcastExclude(exclude: WebSocket, type: string, data: unknown) {
+  if (!wss) return;
+
+  const message = JSON.stringify({ type, data });
+
+  wss.clients.forEach((client) => {
+    if (client !== exclude && client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
   });

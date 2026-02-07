@@ -19,6 +19,7 @@ const Drawing = (() => {
   let currentPoints = []; // points for WS batch sending
   let batchTimer = null;
   let isErasing = false; // eraser drag state (separate from currentStroke)
+  let eraseRedrawPending = false; // rAF batch flag for eraser
   const BATCH_INTERVAL = 50; // ms
 
   // Incremental drawing state
@@ -37,8 +38,8 @@ const Drawing = (() => {
   let resizeObserver = null;
   const RESIZE_DEBOUNCE_MS = 100;
 
-  // Intermediate stroking state (for clearing on final stroke)
-  let intermediateStrokeIds = new Set();
+  // Intermediate stroking state — Map of strokeId → {tool, color, width, alpha, points[]}
+  let intermediateStrokes = new Map();
 
   // Per-stroke DOM read cache (set on pointerdown, cleared on pointerup)
   let cachedCellsRect = null;
@@ -120,6 +121,60 @@ const Drawing = (() => {
       y = pt.yOffset;
     }
     return { x, y };
+  }
+
+  // --- Transmission Helpers ---
+
+  // Strip internal pixel coords (_x, _y) before WS send
+  function stripInternalCoords(points) {
+    const out = new Array(points.length);
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      out[i] = { cellIndex: p.cellIndex, xRatio: p.xRatio, yOffset: p.yOffset };
+    }
+    return out;
+  }
+
+  // Ramer-Douglas-Peucker point simplification (reduces WS payload 50-70%)
+  // Normalizes yOffset to xRatio scale using container width for uniform distance
+  function simplifyPoints(points, epsilon) {
+    if (points.length <= 2) return points;
+    if (epsilon === undefined) epsilon = 0.002;
+
+    // Normalize yOffset → same scale as xRatio (0-1 range relative to container width)
+    const cw = (cellsDiv ? cellsDiv.clientWidth : (container ? container.clientWidth : 960)) || 960;
+
+    let maxDist = 0, maxIdx = 0;
+    const first = points[0], last = points[points.length - 1];
+    const firstYNorm = first.yOffset / cw;
+    const lastYNorm = last.yOffset / cw;
+    const dx = last.xRatio - first.xRatio;
+    const dy = lastYNorm - firstYNorm;
+    const lenSq = dx * dx + dy * dy;
+
+    for (let i = 1; i < points.length - 1; i++) {
+      const ptYNorm = points[i].yOffset / cw;
+      let dist;
+      if (lenSq === 0) {
+        const ex = points[i].xRatio - first.xRatio;
+        const ey = ptYNorm - firstYNorm;
+        dist = Math.sqrt(ex * ex + ey * ey);
+      } else {
+        const t = Math.max(0, Math.min(1,
+          ((points[i].xRatio - first.xRatio) * dx + (ptYNorm - firstYNorm) * dy) / lenSq));
+        const px = first.xRatio + t * dx - points[i].xRatio;
+        const py = firstYNorm + t * dy - ptYNorm;
+        dist = Math.sqrt(px * px + py * py);
+      }
+      if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+    }
+
+    if (maxDist > epsilon) {
+      const left = simplifyPoints(points.slice(0, maxIdx + 1), epsilon);
+      const right = simplifyPoints(points.slice(maxIdx), epsilon);
+      return left.slice(0, -1).concat(right);
+    }
+    return [first, last];
   }
 
   // --- Canvas Setup ---
@@ -263,7 +318,7 @@ const Drawing = (() => {
       undoBtn.addEventListener('click', () => {
         if (strokes.length === 0) return;
         strokes.pop();
-        redrawAll();
+        redrawAll(true); // skip cache invalidation — cell positions unchanged
         WsClient.send('draw:undo', {});
       });
     }
@@ -347,17 +402,29 @@ const Drawing = (() => {
       lastDrawnIndex = 1;
     }
 
+    // Per-stroke flag: only send full metadata in first batch
+    let sentStrokeMetadata = false;
+
     // Start batch timer for WS sending
     batchTimer = setInterval(() => {
       if (currentPoints.length > 0 && currentStroke) {
-        WsClient.send('draw:stroking', {
-          strokeId: currentStroke.strokeId,
-          tool: currentStroke.tool,
-          color: currentStroke.color,
-          width: currentStroke.width,
-          alpha: currentStroke.alpha,
-          points: currentPoints.slice(),
-        });
+        const pts = stripInternalCoords(currentPoints);
+        if (!sentStrokeMetadata) {
+          WsClient.send('draw:stroking', {
+            strokeId: currentStroke.strokeId,
+            tool: currentStroke.tool,
+            color: currentStroke.color,
+            width: currentStroke.width,
+            alpha: currentStroke.alpha,
+            points: pts,
+          });
+          sentStrokeMetadata = true;
+        } else {
+          WsClient.send('draw:stroking', {
+            strokeId: currentStroke.strokeId,
+            points: pts,
+          });
+        }
         currentPoints = [];
       }
     }, BATCH_INTERVAL);
@@ -457,11 +524,7 @@ const Drawing = (() => {
     if (currentPoints.length > 0) {
       WsClient.send('draw:stroking', {
         strokeId: currentStroke.strokeId,
-        tool: currentStroke.tool,
-        color: currentStroke.color,
-        width: currentStroke.width,
-        alpha: currentStroke.alpha,
-        points: currentPoints.slice(),
+        points: stripInternalCoords(currentPoints),
       });
     }
 
@@ -476,7 +539,14 @@ const Drawing = (() => {
     // Clear active canvas
     if (ctx) ctx.clearRect(0, 0, cw, container.scrollHeight);
 
-    WsClient.send('draw:stroke', currentStroke);
+    WsClient.send('draw:stroke', {
+      strokeId: currentStroke.strokeId,
+      tool: currentStroke.tool,
+      color: currentStroke.color,
+      width: currentStroke.width,
+      alpha: currentStroke.alpha,
+      points: simplifyPoints(stripInternalCoords(currentStroke.points)),
+    });
 
     currentStroke = null;
     currentPoints = [];
@@ -500,12 +570,19 @@ const Drawing = (() => {
         if (dx * dx + dy * dy < threshold * threshold) {
           strokes.splice(i, 1);
           erased = true;
-          redrawAll();
           WsClient.send('draw:erase', { strokeId: stroke.strokeId });
           break;
         }
       }
       if (erased) break;
+    }
+    // Batch redraw via rAF — at most 1 redraw per frame even with rapid erasing
+    if (erased && !eraseRedrawPending) {
+      eraseRedrawPending = true;
+      requestAnimationFrame(() => {
+        redrawAll(true);
+        eraseRedrawPending = false;
+      });
     }
   }
 
@@ -554,9 +631,9 @@ const Drawing = (() => {
     targetCtx.globalAlpha = 1;
   }
 
-  function redrawAll() {
+  function redrawAll(skipCacheInvalidation) {
     if (!staticCtx || !staticCanvas || !container) return;
-    invalidateCellCache();
+    if (!skipCacheInvalidation) invalidateCellCache();
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
     // Clear both canvases
@@ -571,49 +648,81 @@ const Drawing = (() => {
 
   function receiveStroke(stroke) {
     strokes.push(stroke);
-    intermediateStrokeIds.delete(stroke.strokeId);
-    if (intermediateStrokeIds.size === 0) {
-      redrawAll();
-    } else {
-      invalidateCellCache();
-      const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-      const positions = getCellPositions();
-      drawSmoothStroke(staticCtx, stroke, cw, positions);
-    }
+    intermediateStrokes.delete(stroke.strokeId);
+    // Draw completed stroke on static canvas (incremental, no redrawAll)
+    if (!cellPosCache) buildCellCache();
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
+    const positions = getCellPositions();
+    drawSmoothStroke(staticCtx, stroke, cw, positions);
+    // Redraw active canvas with remaining intermediates only
+    redrawIntermediateCanvas();
   }
 
   function receiveStroking(data) {
-    intermediateStrokeIds.add(data.strokeId);
-    if (!staticCtx || !data.points || data.points.length === 0) return;
+    if (!ctx || !data.points || data.points.length === 0) return;
+
+    // Accumulate points in intermediateStrokes Map
+    let entry = intermediateStrokes.get(data.strokeId);
+    if (!entry) {
+      entry = {
+        tool: data.tool || 'pen',
+        color: data.color || '#000',
+        width: data.width || 4,
+        alpha: data.alpha || 1,
+        points: [],
+      };
+      intermediateStrokes.set(data.strokeId, entry);
+    } else if (data.tool) {
+      // Update metadata if provided (first batch has full metadata)
+      entry.tool = data.tool;
+      entry.color = data.color || entry.color;
+      entry.width = data.width || entry.width;
+      entry.alpha = data.alpha !== undefined ? data.alpha : entry.alpha;
+    }
+    for (let i = 0; i < data.points.length; i++) {
+      entry.points.push(data.points[i]);
+    }
+
+    // Redraw all intermediates on active canvas
+    redrawIntermediateCanvas();
+  }
+
+  function redrawIntermediateCanvas() {
+    if (!ctx || !container) return;
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
+    ctx.clearRect(0, 0, cw, container.scrollHeight);
+    if (intermediateStrokes.size === 0) return;
 
     if (!cellPosCache) buildCellCache();
-    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-    const positions = cellPosCache;
+    const positions = getCellPositions();
 
-    staticCtx.globalAlpha = data.alpha || 1;
-    staticCtx.strokeStyle = data.color || '#000';
-    staticCtx.lineWidth = data.width || 4;
-    staticCtx.lineCap = 'round';
-    staticCtx.lineJoin = 'round';
+    intermediateStrokes.forEach((entry) => {
+      const pts = entry.points;
+      if (pts.length === 0) return;
+      ctx.globalAlpha = entry.alpha;
+      ctx.strokeStyle = entry.color;
+      ctx.lineWidth = entry.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
 
-    const pts = data.points;
-    if (pts.length === 1) {
-      const { x, y } = ptToPixelXY(pts[0], cw, positions);
-      staticCtx.beginPath();
-      staticCtx.arc(x, y, (data.width || 4) / 2, 0, Math.PI * 2);
-      staticCtx.fillStyle = data.color || '#000';
-      staticCtx.fill();
-    } else {
-      const p0 = ptToPixelXY(pts[0], cw, positions);
-      staticCtx.beginPath();
-      staticCtx.moveTo(p0.x, p0.y);
-      for (let i = 1; i < pts.length; i++) {
-        const p = ptToPixelXY(pts[i], cw, positions);
-        staticCtx.lineTo(p.x, p.y);
+      if (pts.length === 1) {
+        const { x, y } = ptToPixelXY(pts[0], cw, positions);
+        ctx.beginPath();
+        ctx.arc(x, y, entry.width / 2, 0, Math.PI * 2);
+        ctx.fillStyle = entry.color;
+        ctx.fill();
+      } else {
+        const p0 = ptToPixelXY(pts[0], cw, positions);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < pts.length; i++) {
+          const p = ptToPixelXY(pts[i], cw, positions);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
       }
-      staticCtx.stroke();
-    }
-    staticCtx.globalAlpha = 1;
+      ctx.globalAlpha = 1;
+    });
   }
 
   function receiveUndo(data) {
@@ -623,34 +732,34 @@ const Drawing = (() => {
     } else {
       strokes.pop();
     }
-    redrawAll();
+    redrawAll(true); // skip cache invalidation — cell positions unchanged
   }
 
   function receiveErase(data) {
     if (data && data.strokeId) {
       const idx = strokes.findIndex(s => s.strokeId === data.strokeId);
       if (idx !== -1) strokes.splice(idx, 1);
-      redrawAll();
+      redrawAll(true); // skip cache invalidation — cell positions unchanged
     }
   }
 
   function receiveClear() {
     strokes = [];
-    intermediateStrokeIds.clear();
+    intermediateStrokes.clear();
     invalidateCellCache();
     redrawAll();
   }
 
   function receiveFull(data) {
     strokes = data.strokes || [];
-    intermediateStrokeIds.clear();
+    intermediateStrokes.clear();
     invalidateCellCache();
     redrawAll();
   }
 
   function clearAll() {
     strokes = [];
-    intermediateStrokeIds.clear();
+    intermediateStrokes.clear();
     invalidateCellCache();
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     if (staticCtx && staticCanvas && container) {
@@ -672,7 +781,8 @@ const Drawing = (() => {
     currentStroke = null;
     currentPoints = [];
     isErasing = false;
-    intermediateStrokeIds.clear();
+    eraseRedrawPending = false;
+    intermediateStrokes.clear();
     invalidateCellCache();
     cachedCellsRect = null;
     cachedContainerTop = 0;

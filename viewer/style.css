@@ -167,6 +167,8 @@ header {
   position: sticky;
   top: 0;
   z-index: 200;
+  height: var(--header-height);
+  box-sizing: border-box;
 }
 
 .header-left {
@@ -192,7 +194,11 @@ header {
 /* === App Layout (flex split-pane) === */
 #app-layout {
   display: flex;
-  min-height: calc(100vh - var(--header-height));
+  min-height: calc(100vh - var(--header-height) - var(--footer-height));
+  transition: margin-right 0.25s ease-out;
+}
+#app-layout.chat-open {
+  margin-right: calc(var(--chat-width) + var(--resize-handle-width));
 }
 
 /* === Notebook Container === */
@@ -210,10 +216,14 @@ header {
 
 /* === Chat Resize Handle === */
 #chat-resize-handle {
+  position: fixed;
+  top: var(--header-height);
+  bottom: var(--footer-height);
+  right: var(--chat-width);
   width: 0;
   cursor: col-resize;
   background: transparent;
-  flex-shrink: 0;
+  z-index: 201;
   transition: width 0.2s ease-out, background 0.15s;
   overflow: hidden;
 }
@@ -707,6 +717,8 @@ footer {
   border-top: 1px solid var(--border-color);
   font-size: 0.85rem;
   z-index: 350; /* above draw canvas (301), below tools panel (400) */
+  height: var(--footer-height);
+  box-sizing: border-box;
 }
 
 footer button {
@@ -783,13 +795,13 @@ footer label {
   padding: 16px 20px;
 }
 
-/* === Chat Panel (desktop: sticky inline sidebar) === */
+/* === Chat Panel (desktop: fixed sidebar) === */
 .chat-panel {
-  position: sticky;
+  position: fixed;
   top: var(--header-height);
-  height: calc(100vh - var(--header-height) - var(--footer-height));
+  right: 0;
+  bottom: var(--footer-height);
   width: var(--chat-width);
-  flex-shrink: 0;
   background: var(--bg-primary);
   border-left: 1px solid var(--border-color);
   display: flex;
@@ -1330,6 +1342,10 @@ footer label {
     display: block;
   }
 
+  #app-layout.chat-open {
+    margin-right: 0;
+  }
+
   #notebook-container {
     padding: 8px;
   }
@@ -1341,9 +1357,9 @@ footer label {
   .chat-panel {
     position: fixed;
     top: 0;
+    bottom: 0;
     right: -100%;
     width: 100%;
-    height: 100%;
     transition: right 0.3s ease;
     overflow: visible;
   }

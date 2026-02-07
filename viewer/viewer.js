@@ -49,6 +49,9 @@
   const themeToggle = document.getElementById('theme-toggle');
   const btnDownload = document.getElementById('btn-download');
 
+  // Layout
+  const appLayout = document.getElementById('app-layout');
+
   // Chat elements
   const chatPanel = document.getElementById('chat-panel');
   const chatMessages = document.getElementById('chat-messages');
@@ -144,6 +147,7 @@
         // Disable transition for initial state setup (no animation on page load)
         if (chatPanel) chatPanel.style.transition = 'none';
         if (chatResizeHandle) chatResizeHandle.style.transition = 'none';
+        if (appLayout) appLayout.style.transition = 'none';
         toggleChat(shouldOpen);
         // Force reflow then re-enable transitions
         if (chatPanel) {
@@ -151,6 +155,7 @@
           chatPanel.style.transition = '';
         }
         if (chatResizeHandle) chatResizeHandle.style.transition = '';
+        if (appLayout) { appLayout.offsetHeight; appLayout.style.transition = ''; }
       }
     }
 
@@ -643,6 +648,7 @@
 
     if (isMobile) {
       // Mobile: fixed overlay with slide-in animation
+      if (appLayout) appLayout.classList.remove('chat-open');
       if (chatVisible) {
         chatPanel.classList.add('open');
         chatPanel.classList.remove('collapsed');
@@ -650,13 +656,15 @@
         chatPanel.classList.remove('open');
       }
     } else {
-      // Desktop: inline sidebar with collapsed class
+      // Desktop: fixed sidebar with collapsed class + margin on app-layout
       if (chatVisible) {
         chatPanel.classList.remove('collapsed');
+        if (appLayout) appLayout.classList.add('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.add('visible');
         if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
       } else {
         chatPanel.classList.add('collapsed');
+        if (appLayout) appLayout.classList.remove('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
         if (chatFloatToggle) chatFloatToggle.classList.add('visible');
       }
@@ -1064,6 +1072,7 @@
       if (isMobile) {
         // Switching to mobile: remove desktop classes, apply mobile classes
         chatPanel.classList.remove('collapsed');
+        if (appLayout) appLayout.classList.remove('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
         if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         if (!chatVisible) {
@@ -1076,10 +1085,12 @@
         chatPanel.classList.remove('open');
         if (chatVisible) {
           chatPanel.classList.remove('collapsed');
+          if (appLayout) appLayout.classList.add('chat-open');
           if (chatResizeHandle) chatResizeHandle.classList.add('visible');
           if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         } else {
           chatPanel.classList.add('collapsed');
+          if (appLayout) appLayout.classList.remove('chat-open');
           if (chatFloatToggle) chatFloatToggle.classList.add('visible');
         }
       }
