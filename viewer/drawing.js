@@ -9,6 +9,7 @@ const Drawing = (() => {
   let canvas = null; // active stroke canvas
   let ctx = null;    // active stroke context
   let container = null; // #notebook-container
+  let cellsDiv = null;  // #notebook-cells (max-width:960px, centered)
   let isTeacher = false;
   let drawingMode = false;
 
@@ -20,9 +21,8 @@ const Drawing = (() => {
   let isErasing = false; // eraser drag state (separate from currentStroke)
   const BATCH_INTERVAL = 50; // ms
 
-  // rAF batching
-  let rafId = null;
-  let lastDrawnIndex = 0; // incremental drawing: tracks how many points already rendered
+  // Incremental drawing state
+  let lastDrawnIndex = 0; // tracks how many points already rendered
 
   // Tool state
   let currentTool = 'pen'; // 'pen' | 'highlighter' | 'eraser'
@@ -40,6 +40,11 @@ const Drawing = (() => {
   // Intermediate stroking state (for clearing on final stroke)
   let intermediateStrokeIds = new Set();
 
+  // Per-stroke DOM read cache (set on pointerdown, cleared on pointerup)
+  let cachedCellsRect = null;
+  let cachedContainerTop = 0;
+  let cachedCW = 0;
+
   // Cell position cache — built once per resize/stroke-start
   let cellPosCache = null;
 
@@ -51,7 +56,7 @@ const Drawing = (() => {
 
   function buildCellCache() {
     const containerRect = container.getBoundingClientRect();
-    const cells = container.querySelectorAll('.cell');
+    const cells = (cellsDiv || container).querySelectorAll('.cell');
     const positions = [];
     for (let i = 0; i < cells.length; i++) {
       const cellRect = cells[i].getBoundingClientRect();
@@ -73,22 +78,28 @@ const Drawing = (() => {
   //   { cellIndex, xRatio, yOffset } for WS transmission
   //   + _x, _y (absolute pixel coords) cached for fast local drawing
 
-  // Find cell index from absolute Y using reverse scan (gap-safe)
+  // Find cell index from absolute Y using binary search (O(log n))
+  // positions array is sorted by top ascending
   function findCellIndex(absY, positions) {
-    for (let i = positions.length - 1; i >= 0; i--) {
-      if (absY >= positions[i].top) {
-        return i;
-      }
+    let lo = 0, hi = positions.length - 1, result = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (positions[mid].top <= absY) { result = mid; lo = mid + 1; }
+      else { hi = mid - 1; }
     }
-    return 0; // above first cell
+    return result;
   }
 
   // Full coordinate conversion — used by onPointerDown and eraser
+  // X is relative to cellsDiv (centered content area) for consistent alignment
+  // Y is relative to container (scroll context)
   function toCoords(e) {
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const absY = e.clientY - rect.top + container.scrollTop;
-    const cw = container.clientWidth;
+    // Use per-stroke cache if available, otherwise read DOM
+    const cellsRect = cachedCellsRect || (cellsDiv ? cellsDiv.getBoundingClientRect() : container.getBoundingClientRect());
+    const x = e.clientX - cellsRect.left;
+    const containerTop = cachedContainerTop || container.getBoundingClientRect().top;
+    const absY = e.clientY - containerTop + container.scrollTop;
+    const cw = cachedCW || (cellsDiv ? cellsDiv.clientWidth : container.clientWidth);
     const xRatio = cw > 0 ? x / cw : 0;
 
     const positions = getCellPositions();
@@ -123,7 +134,8 @@ const Drawing = (() => {
   function init(isTeacherPreview) {
     isTeacher = isTeacherPreview;
     container = document.getElementById('notebook-container');
-    if (!container) return;
+    cellsDiv = document.getElementById('notebook-cells');
+    if (!container || !cellsDiv) return;
 
     // Teacher preview: fix container width to match student view's max-width (960px).
     // Different container widths cause different text wrapping -> different scrollHeight
@@ -176,17 +188,21 @@ const Drawing = (() => {
   function resizeCanvas() {
     if (!canvas || !staticCanvas || !container) return;
     if (!staticCtx || !ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = container.clientWidth;
+    // Teacher preview: DPR 1 to reduce GPU memory (~122MB → ~30MB)
+    const dpr = isTeacher ? 1 : (window.devicePixelRatio || 1);
+    const w = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const h = container.scrollHeight;
+    const leftOffset = cellsDiv ? cellsDiv.offsetLeft : 0;
 
-    // Resize both canvases
+    // Resize both canvases — aligned to cellsDiv (centered content area)
+    staticCanvas.style.left = leftOffset + 'px';
     staticCanvas.style.width = w + 'px';
     staticCanvas.style.height = h + 'px';
     staticCanvas.width = w * dpr;
     staticCanvas.height = h * dpr;
     staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    canvas.style.left = leftOffset + 'px';
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
     canvas.width = w * dpr;
@@ -293,6 +309,11 @@ const Drawing = (() => {
     // Rebuild cell cache at stroke start
     invalidateCellCache();
 
+    // Cache DOM reads for the entire stroke duration
+    cachedCellsRect = cellsDiv ? cellsDiv.getBoundingClientRect() : container.getBoundingClientRect();
+    cachedContainerTop = container.getBoundingClientRect().top;
+    cachedCW = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
+
     const pt = toCoords(e);
 
     if (currentTool === 'eraser') {
@@ -354,34 +375,26 @@ const Drawing = (() => {
     if (!currentStroke) return;
     e.preventDefault();
 
-    // Cache all DOM reads ONCE for this entire event
-    const rect = container.getBoundingClientRect();
-    const cw = container.clientWidth;
+    // Use per-stroke cached DOM reads; only scrollTop is read live (can change during stroke)
+    const cellsRect = cachedCellsRect;
+    const cw = cachedCW;
+    const containerTop = cachedContainerTop;
     const st = container.scrollTop;
     const positions = getCellPositions();
 
     const events = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
     for (let j = 0; j < events.length; j++) {
       const ce = events[j];
-      const x = ce.clientX - rect.left;
-      const absY = ce.clientY - rect.top + st;
+      const x = ce.clientX - cellsRect.left;
+      const absY = ce.clientY - containerTop + st;
       const xRatio = cw > 0 ? x / cw : 0;
 
-      // Find cell using cached positions
+      // Find cell using binary search on cached positions
       let cellIndex = -1;
       let yOffset = absY;
       if (positions.length > 0) {
-        for (let i = positions.length - 1; i >= 0; i--) {
-          if (absY >= positions[i].top) {
-            cellIndex = i;
-            yOffset = absY - positions[i].top;
-            break;
-          }
-        }
-        if (cellIndex === -1) {
-          cellIndex = 0;
-          yOffset = absY - positions[0].top;
-        }
+        cellIndex = findCellIndex(absY, positions);
+        yOffset = absY - positions[cellIndex].top;
       }
 
       const pt = { cellIndex, xRatio, yOffset, _x: x, _y: absY };
@@ -389,16 +402,8 @@ const Drawing = (() => {
       currentPoints.push(pt);
     }
 
-    // Schedule rAF to draw on active canvas (no direct draw here)
-    scheduleActiveRedraw();
-  }
-
-  function scheduleActiveRedraw() {
-    if (rafId) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
-      drawActiveStroke();
-    });
+    // Draw directly — getCoalescedEvents already batches per frame
+    drawActiveStroke();
   }
 
   function drawActiveStroke() {
@@ -443,11 +448,10 @@ const Drawing = (() => {
       batchTimer = null;
     }
 
-    // Cancel pending rAF
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
-    }
+    // Clear per-stroke DOM cache
+    cachedCellsRect = null;
+    cachedContainerTop = 0;
+    cachedCW = 0;
 
     // Flush remaining unsent points
     if (currentPoints.length > 0) {
@@ -465,7 +469,7 @@ const Drawing = (() => {
     strokes.push(currentStroke);
 
     invalidateCellCache();
-    const cw = container.clientWidth;
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
     drawSmoothStroke(staticCtx, currentStroke, cw, positions);
 
@@ -482,9 +486,9 @@ const Drawing = (() => {
 
   function eraseAtPoint(pt) {
     const threshold = 15;
-    const px = pt._x !== undefined ? pt._x : pt.xRatio * container.clientWidth;
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
+    const px = pt._x !== undefined ? pt._x : pt.xRatio * cw;
     const py = pt._y !== undefined ? pt._y : pt.yOffset;
-    const cw = container.clientWidth;
     const positions = getCellPositions();
 
     let erased = false;
@@ -553,7 +557,7 @@ const Drawing = (() => {
   function redrawAll() {
     if (!staticCtx || !staticCanvas || !container) return;
     invalidateCellCache();
-    const cw = container.clientWidth;
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
     // Clear both canvases
     staticCtx.clearRect(0, 0, cw, container.scrollHeight);
@@ -572,7 +576,7 @@ const Drawing = (() => {
       redrawAll();
     } else {
       invalidateCellCache();
-      const cw = container.clientWidth;
+      const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
       const positions = getCellPositions();
       drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
@@ -583,7 +587,7 @@ const Drawing = (() => {
     if (!staticCtx || !data.points || data.points.length === 0) return;
 
     if (!cellPosCache) buildCellCache();
-    const cw = container.clientWidth;
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = cellPosCache;
 
     staticCtx.globalAlpha = data.alpha || 1;
@@ -648,18 +652,18 @@ const Drawing = (() => {
     strokes = [];
     intermediateStrokeIds.clear();
     invalidateCellCache();
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     if (staticCtx && staticCanvas && container) {
-      staticCtx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
+      staticCtx.clearRect(0, 0, cw, container.scrollHeight);
     }
     if (ctx && canvas && container) {
-      ctx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
+      ctx.clearRect(0, 0, cw, container.scrollHeight);
     }
   }
 
   function destroy() {
     // Cancel any pending operations
     if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
-    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
     if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
 
@@ -670,6 +674,9 @@ const Drawing = (() => {
     isErasing = false;
     intermediateStrokeIds.clear();
     invalidateCellCache();
+    cachedCellsRect = null;
+    cachedContainerTop = 0;
+    cachedCW = 0;
 
     // Reset drawing mode
     drawingMode = false;
@@ -692,6 +699,7 @@ const Drawing = (() => {
     staticCanvas = null; staticCtx = null;
     canvas = null; ctx = null;
     container = null;
+    cellsDiv = null;
   }
 
   return {
