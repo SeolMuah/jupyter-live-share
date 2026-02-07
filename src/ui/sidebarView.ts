@@ -248,14 +248,57 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      flex: 1;
-      padding: 20px;
+      min-height: 100vh;
+      padding: 20px 20px 25vh 20px;
     }
-    .not-running p {
-      margin-bottom: 12px;
+    .not-running-card {
+      width: 100%;
+      max-width: 280px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .not-running-title {
       color: var(--vscode-descriptionForeground);
       font-size: 12px;
       text-align: center;
+      margin-bottom: 4px;
+    }
+    .not-running-card .form-group {
+      width: 100%;
+    }
+    .not-running-card .form-label {
+      display: block;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 4px;
+    }
+    .not-running-card .form-input {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, transparent));
+      border-radius: 4px;
+      font-family: var(--vscode-font-family);
+    }
+    .not-running-card .form-checkbox-group {
+      width: 100%;
+    }
+    .not-running-card .form-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .not-running-card .form-checkbox-desc {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      margin-left: 22px;
+      margin-top: 2px;
     }
 
     /* Chat area */
@@ -456,22 +499,21 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
   <!-- Not running state -->
   <div class="not-running" id="notRunning">
-    <p>No active session</p>
-    <div style="width:100%; margin-bottom:8px;">
-      <label style="display:block; font-size:11px; color:var(--vscode-descriptionForeground); margin-bottom:2px;">Display Name</label>
-      <input type="text" id="teacherName" value="Teacher" maxlength="30"
-        style="width:100%; padding:5px 8px; font-size:12px; background:var(--vscode-input-background); color:var(--vscode-input-foreground); border:1px solid var(--vscode-input-border,var(--vscode-widget-border,transparent)); border-radius:3px; font-family:var(--vscode-font-family);" />
-    </div>
-    <div style="margin-bottom:8px;">
-      <label style="display:flex; align-items:center; gap:6px; font-size:11px; cursor:pointer;">
-        <input type="checkbox" id="shareImages" checked />
-        로컬 이미지 공유
-      </label>
-      <div style="font-size:10px; color:var(--vscode-descriptionForeground); margin-left:20px;">
-        마크다운/HTML의 로컬 이미지를 학생에게 전송
+    <div class="not-running-card">
+      <div class="not-running-title">No active session</div>
+      <div class="form-group">
+        <label class="form-label" for="teacherName">Display Name</label>
+        <input type="text" id="teacherName" class="form-input" value="Teacher" maxlength="30" />
       </div>
+      <div class="form-checkbox-group">
+        <label class="form-checkbox-label">
+          <input type="checkbox" id="shareImages" checked />
+          로컬 이미지 공유
+        </label>
+        <div class="form-checkbox-desc">마크다운/HTML의 로컬 이미지를 학생에게 전송</div>
+      </div>
+      <button class="btn-primary" id="btnStart">Start Session</button>
     </div>
-    <button class="btn-primary" id="btnStart">Start Session</button>
   </div>
 
   <!-- Running state -->

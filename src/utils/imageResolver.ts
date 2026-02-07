@@ -3,6 +3,13 @@ import * as path from 'path';
 import { Logger } from './logger';
 import { getConfig, LiveShareConfig } from './config';
 
+// Project root for security boundary (set by watcher.ts on session start)
+let projectRoot: string | null = null;
+
+export function setProjectRoot(root: string | null): void {
+  projectRoot = root;
+}
+
 // Supported image extensions
 const SUPPORTED_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico',
@@ -83,7 +90,8 @@ function isLocalPath(src: string): boolean {
 
 /**
  * Resolve a local image path to an absolute path, with security checks.
- * Only allows paths within baseDir and its subdirectories.
+ * When projectRoot is set, allows paths within the workspace root.
+ * Otherwise falls back to baseDir (notebook/document directory) as boundary.
  */
 function resolveImagePath(src: string, baseDir: string): string | null {
   try {
@@ -91,12 +99,13 @@ function resolveImagePath(src: string, baseDir: string): string | null {
     const absPath = path.resolve(baseDir, decoded);
     const normalizedAbs = path.normalize(absPath);
 
-    // Security: resolved path must start with baseDir + separator
-    // This allows baseDir/file.png and baseDir/sub/file.png
-    // but blocks ../sibling/file.png and any other traversal
-    const normalizedBase = path.normalize(baseDir);
-    if (normalizedAbs !== normalizedBase && !normalizedAbs.startsWith(normalizedBase + path.sep)) {
-      Logger.warn(`Image path traversal blocked: ${src}`);
+    // Security: resolved path must be within the security boundary.
+    // When projectRoot is set (workspace root), allow paths anywhere within the project.
+    // Otherwise, fall back to baseDir (notebook directory) as the boundary.
+    const securityRoot = projectRoot ?? baseDir;
+    const normalizedRoot = path.normalize(securityRoot);
+    if (normalizedAbs !== normalizedRoot && !normalizedAbs.startsWith(normalizedRoot + path.sep)) {
+      Logger.warn(`Image path traversal blocked: ${src} (boundary: ${normalizedRoot})`);
       return null;
     }
 

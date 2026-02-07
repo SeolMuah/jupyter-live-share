@@ -12,19 +12,19 @@ const Drawing = (() => {
   // Stroke state
   let strokes = []; // completed strokes
   let currentStroke = null; // stroke being drawn
-  let currentPoints = []; // points for current stroke
+  let currentPoints = []; // points for WS batch sending
   let batchTimer = null;
   let isErasing = false; // eraser drag state (separate from currentStroke)
+  let lastDrawnIndex = 0; // incremental drawing: last rendered point index
   const BATCH_INTERVAL = 50; // ms
 
   // Tool state
   let currentTool = 'pen'; // 'pen' | 'highlighter' | 'eraser'
-  let currentColor = '#ef4444'; // red default
+  let currentColor = '#ff6b6b'; // coral red default
   let currentWidth = 4; // medium default
 
   // Toolbar elements
-  let toolbar = null;
-  let toolsPanel = null;
+  let toolsPanel = null; // #draw-tools-panel (right side)
 
   // ResizeObserver debounce
   let resizeTimer = null;
@@ -33,12 +33,92 @@ const Drawing = (() => {
   // Intermediate stroking state (for clearing on final stroke)
   let intermediateStrokeIds = new Set();
 
+  // Cell position cache — built once per resize/stroke-start
+  let cellPosCache = null;
+
+  // --- Cell Position Cache ---
+
+  function invalidateCellCache() {
+    cellPosCache = null;
+  }
+
+  function buildCellCache() {
+    const containerRect = container.getBoundingClientRect();
+    const cells = container.querySelectorAll('.cell');
+    const positions = [];
+    for (let i = 0; i < cells.length; i++) {
+      const cellRect = cells[i].getBoundingClientRect();
+      positions.push({
+        top: cellRect.top - containerRect.top + container.scrollTop,
+        height: cellRect.height,
+      });
+    }
+    cellPosCache = positions;
+    return positions;
+  }
+
+  function getCellPositions() {
+    return cellPosCache || buildCellCache();
+  }
+
+  // --- Coordinate Conversion ---
+  // Cell-relative coordinate system:
+  //   { cellIndex, xRatio, yOffset } for WS transmission
+  //   + _x, _y (absolute pixel coords) cached for fast local drawing
+
+  // Find cell index from absolute Y using reverse scan (gap-safe)
+  function findCellIndex(absY, positions) {
+    for (let i = positions.length - 1; i >= 0; i--) {
+      if (absY >= positions[i].top) {
+        return i;
+      }
+    }
+    return 0; // above first cell
+  }
+
+  // Full coordinate conversion — used by onPointerDown and eraser
+  function toCoords(e) {
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const absY = e.clientY - rect.top + container.scrollTop;
+    const cw = container.clientWidth;
+    const xRatio = cw > 0 ? x / cw : 0;
+
+    const positions = getCellPositions();
+    if (positions.length > 0) {
+      const ci = findCellIndex(absY, positions);
+      return { cellIndex: ci, xRatio, yOffset: absY - positions[ci].top, _x: x, _y: absY };
+    }
+    return { cellIndex: -1, xRatio, yOffset: absY, _x: x, _y: absY };
+  }
+
+  // Convert cell-relative point → absolute pixel (for received/stored strokes)
+  function ptToPixelXY(pt, cw, positions) {
+    const x = pt.xRatio * cw;
+    let y;
+    if (pt.cellIndex >= 0 && positions && pt.cellIndex < positions.length) {
+      y = positions[pt.cellIndex].top + pt.yOffset;
+    } else {
+      y = pt.yOffset;
+    }
+    return { x, y };
+  }
+
   // --- Canvas Setup ---
 
   function init(isTeacherPreview) {
     isTeacher = isTeacherPreview;
     container = document.getElementById('notebook-container');
     if (!container) return;
+
+    // Teacher preview: fix container width to match student view's max-width (960px).
+    // Different container widths cause different text wrapping -> different scrollHeight
+    // -> coordinate positions drift. Fixed width ensures identical layout.
+    if (isTeacher) {
+      container.style.minWidth = '960px';
+      container.style.boxSizing = 'border-box';
+      document.body.style.overflowX = 'auto';
+    }
 
     // Create canvas
     canvas = document.createElement('canvas');
@@ -54,18 +134,20 @@ const Drawing = (() => {
     const ro = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
+        invalidateCellCache();
         resizeCanvas();
         redrawAll();
       }, RESIZE_DEBOUNCE_MS);
     });
     ro.observe(container);
 
-    // Toolbar setup
-    toolbar = document.getElementById('draw-toolbar');
-    toolsPanel = toolbar ? toolbar.querySelector('.draw-tools') : null;
+    // Toolbar setup — tools panel on right side, toggle in footer
+    toolsPanel = document.getElementById('draw-tools-panel');
 
-    if (isTeacher && toolbar) {
-      toolbar.style.display = 'flex';
+    if (isTeacher) {
+      // Show draw toggle button in footer
+      const toggle = document.getElementById('draw-toggle');
+      if (toggle) toggle.style.display = '';
       setupToolbar();
       setupPointerEvents();
     }
@@ -95,48 +177,44 @@ const Drawing = (() => {
         toggle.classList.toggle('active', drawingMode);
         if (toolsPanel) toolsPanel.style.display = drawingMode ? 'flex' : 'none';
         canvas.style.pointerEvents = drawingMode ? 'auto' : 'none';
-        canvas.style.cursor = drawingMode ? 'crosshair' : 'default';
         if (drawingMode) {
           canvas.style.touchAction = 'none';
+          updateCanvasCursor();
         } else {
           canvas.style.touchAction = '';
+          canvas.classList.remove('cursor-pen', 'cursor-eraser');
+          canvas.style.cursor = '';
         }
       });
     }
 
-    // Tool buttons
-    toolbar.querySelectorAll('.tool-btn').forEach(btn => {
+    if (!toolsPanel) return;
+
+    toolsPanel.querySelectorAll('.tool-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        toolbar.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+        toolsPanel.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentTool = btn.dataset.tool;
-        if (currentTool === 'eraser') {
-          canvas.style.cursor = 'pointer';
-        } else {
-          canvas.style.cursor = 'crosshair';
-        }
+        updateCanvasCursor();
       });
     });
 
-    // Color buttons
-    toolbar.querySelectorAll('.color-btn').forEach(btn => {
+    toolsPanel.querySelectorAll('.color-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        toolbar.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+        toolsPanel.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentColor = btn.dataset.color;
       });
     });
 
-    // Width buttons
-    toolbar.querySelectorAll('.width-btn').forEach(btn => {
+    toolsPanel.querySelectorAll('.width-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        toolbar.querySelectorAll('.width-btn').forEach(b => b.classList.remove('active'));
+        toolsPanel.querySelectorAll('.width-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentWidth = parseInt(btn.dataset.width, 10);
       });
     });
 
-    // Undo
     const undoBtn = document.getElementById('draw-undo');
     if (undoBtn) {
       undoBtn.addEventListener('click', () => {
@@ -147,7 +225,6 @@ const Drawing = (() => {
       });
     }
 
-    // Clear
     const clearBtn = document.getElementById('draw-clear');
     if (clearBtn) {
       clearBtn.addEventListener('click', () => {
@@ -162,27 +239,30 @@ const Drawing = (() => {
 
   function setupPointerEvents() {
     if (!canvas) return;
-
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
     canvas.addEventListener('pointerleave', onPointerUp);
   }
 
-  function toCoords(e) {
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
-    return {
-      xRatio: container.clientWidth > 0 ? x / container.clientWidth : 0,
-      yAbsolute: y,
-    };
+  function updateCanvasCursor() {
+    if (!canvas) return;
+    canvas.style.cursor = '';
+    canvas.classList.remove('cursor-pen', 'cursor-eraser');
+    if (currentTool === 'eraser') {
+      canvas.classList.add('cursor-eraser');
+    } else {
+      canvas.classList.add('cursor-pen');
+    }
   }
 
   function onPointerDown(e) {
     if (!drawingMode) return;
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
+
+    // Rebuild cell cache at stroke start
+    invalidateCellCache();
 
     const pt = toCoords(e);
 
@@ -204,10 +284,21 @@ const Drawing = (() => {
       points: [pt],
     };
     currentPoints = [pt];
+    lastDrawnIndex = 0;
 
-    // Start batch timer
+    // Draw initial dot immediately using cached pixel coords
+    if (ctx) {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = currentColor;
+      ctx.beginPath();
+      ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Start batch timer for WS sending
     batchTimer = setInterval(() => {
-      if (currentPoints.length > 0) {
+      if (currentPoints.length > 0 && currentStroke) {
         WsClient.send('draw:stroking', {
           strokeId: currentStroke.strokeId,
           tool: currentStroke.tool,
@@ -219,15 +310,11 @@ const Drawing = (() => {
         currentPoints = [];
       }
     }, BATCH_INTERVAL);
-
-    // Draw first dot
-    drawStrokeSegment(currentStroke, [pt]);
   }
 
   function onPointerMove(e) {
     if (!drawingMode) return;
 
-    // Eraser drag: tracked separately from currentStroke
     if (isErasing) {
       e.preventDefault();
       eraseAtPoint(toCoords(e));
@@ -237,19 +324,62 @@ const Drawing = (() => {
     if (!currentStroke) return;
     e.preventDefault();
 
-    const pt = toCoords(e);
-    currentStroke.points.push(pt);
-    currentPoints.push(pt);
+    // Cache all DOM reads ONCE for this entire event
+    const rect = container.getBoundingClientRect();
+    const cw = container.clientWidth;
+    const st = container.scrollTop;
+    const positions = getCellPositions();
 
-    // Draw incrementally (last 2 points)
+    const events = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+    for (let j = 0; j < events.length; j++) {
+      const ce = events[j];
+      const x = ce.clientX - rect.left;
+      const absY = ce.clientY - rect.top + st;
+      const xRatio = cw > 0 ? x / cw : 0;
+
+      // Find cell using cached positions
+      let cellIndex = -1;
+      let yOffset = absY;
+      if (positions.length > 0) {
+        for (let i = positions.length - 1; i >= 0; i--) {
+          if (absY >= positions[i].top) {
+            cellIndex = i;
+            yOffset = absY - positions[i].top;
+            break;
+          }
+        }
+        if (cellIndex === -1) {
+          cellIndex = 0;
+          yOffset = absY - positions[0].top;
+        }
+      }
+
+      const pt = { cellIndex, xRatio, yOffset, _x: x, _y: absY };
+      currentStroke.points.push(pt);
+      currentPoints.push(pt);
+    }
+
+    // Draw new segments using cached pixel coords — zero DOM reads, zero function calls
     const pts = currentStroke.points;
     if (pts.length >= 2) {
-      drawStrokeSegment(currentStroke, [pts[pts.length - 2], pts[pts.length - 1]]);
+      const start = Math.max(0, lastDrawnIndex);
+      ctx.globalAlpha = currentStroke.alpha;
+      ctx.strokeStyle = currentStroke.color;
+      ctx.lineWidth = currentStroke.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[start]._x, pts[start]._y);
+      for (let i = start + 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i]._x, pts[i]._y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      lastDrawnIndex = pts.length - 1;
     }
   }
 
   function onPointerUp(e) {
-    // Reset eraser drag state
     if (isErasing) {
       isErasing = false;
       return;
@@ -263,30 +393,44 @@ const Drawing = (() => {
       batchTimer = null;
     }
 
-    // Send final stroke
+    // Flush remaining unsent points
+    if (currentPoints.length > 0) {
+      WsClient.send('draw:stroking', {
+        strokeId: currentStroke.strokeId,
+        tool: currentStroke.tool,
+        color: currentStroke.color,
+        width: currentStroke.width,
+        alpha: currentStroke.alpha,
+        points: currentPoints.slice(),
+      });
+    }
+
     strokes.push(currentStroke);
     WsClient.send('draw:stroke', currentStroke);
 
     currentStroke = null;
     currentPoints = [];
+    lastDrawnIndex = 0;
+    // Incremental rendering is already on canvas — no redrawAll() needed.
+    // Bezier smoothing happens on resize, undo, clear, or student receive.
   }
 
   // --- Eraser ---
 
   function eraseAtPoint(pt) {
-    const threshold = 15; // pixels
-    const containerWidth = container.clientWidth;
-    const px = pt.xRatio * containerWidth;
-    const py = pt.yAbsolute;
+    const threshold = 15;
+    const px = pt._x !== undefined ? pt._x : pt.xRatio * container.clientWidth;
+    const py = pt._y !== undefined ? pt._y : pt.yOffset;
+    const cw = container.clientWidth;
+    const positions = getCellPositions();
 
     let erased = false;
     for (let i = strokes.length - 1; i >= 0; i--) {
       const stroke = strokes[i];
       for (const sp of stroke.points) {
-        const sx = sp.xRatio * containerWidth;
-        const sy = sp.yAbsolute;
-        const dist = Math.sqrt((px - sx) ** 2 + (py - sy) ** 2);
-        if (dist < threshold) {
+        const { x: sx, y: sy } = ptToPixelXY(sp, cw, positions);
+        const dx = px - sx, dy = py - sy;
+        if (dx * dx + dy * dy < threshold * threshold) {
           strokes.splice(i, 1);
           erased = true;
           redrawAll();
@@ -298,39 +442,12 @@ const Drawing = (() => {
     }
   }
 
-  // --- Drawing ---
+  // --- Smooth Drawing (Quadratic Bezier Curves) ---
 
-  function drawStrokeSegment(stroke, points) {
-    if (!ctx || points.length === 0) return;
-    const w = container.clientWidth;
-
-    ctx.save();
-    ctx.globalAlpha = stroke.alpha;
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    if (points.length === 1) {
-      // Single dot
-      ctx.beginPath();
-      ctx.arc(points[0].xRatio * w, points[0].yAbsolute, stroke.width / 2, 0, Math.PI * 2);
-      ctx.fillStyle = stroke.color;
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(points[0].xRatio * w, points[0].yAbsolute);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].xRatio * w, points[i].yAbsolute);
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  function drawFullStroke(stroke) {
+  function drawSmoothStroke(stroke, cw, positions) {
     if (!ctx || !stroke.points || stroke.points.length === 0) return;
-    const w = container.clientWidth;
+
+    const pts = stroke.points;
 
     ctx.save();
     ctx.globalAlpha = stroke.alpha;
@@ -339,28 +456,46 @@ const Drawing = (() => {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    if (stroke.points.length === 1) {
+    if (pts.length === 1) {
+      const { x, y } = ptToPixelXY(pts[0], cw, positions);
       ctx.beginPath();
-      ctx.arc(stroke.points[0].xRatio * w, stroke.points[0].yAbsolute, stroke.width / 2, 0, Math.PI * 2);
+      ctx.arc(x, y, stroke.width / 2, 0, Math.PI * 2);
       ctx.fillStyle = stroke.color;
       ctx.fill();
-    } else {
+    } else if (pts.length === 2) {
+      const p0 = ptToPixelXY(pts[0], cw, positions);
+      const p1 = ptToPixelXY(pts[1], cw, positions);
       ctx.beginPath();
-      ctx.moveTo(stroke.points[0].xRatio * w, stroke.points[0].yAbsolute);
-      for (let i = 1; i < stroke.points.length; i++) {
-        ctx.lineTo(stroke.points[i].xRatio * w, stroke.points[i].yAbsolute);
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+    } else {
+      const p0 = ptToPixelXY(pts[0], cw, positions);
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cp = ptToPixelXY(pts[i], cw, positions);
+        const next = ptToPixelXY(pts[i + 1], cw, positions);
+        ctx.quadraticCurveTo(cp.x, cp.y, (cp.x + next.x) / 2, (cp.y + next.y) / 2);
       }
+
+      const last = ptToPixelXY(pts[pts.length - 1], cw, positions);
+      ctx.lineTo(last.x, last.y);
       ctx.stroke();
     }
+
     ctx.restore();
   }
 
   function redrawAll() {
     if (!ctx || !canvas || !container) return;
-    // Use logical CSS dimensions (transform already scales by DPR)
-    ctx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
+    invalidateCellCache();
+    const cw = container.clientWidth;
+    const positions = getCellPositions();
+    ctx.clearRect(0, 0, cw, container.scrollHeight);
     for (const stroke of strokes) {
-      drawFullStroke(stroke);
+      drawSmoothStroke(stroke, cw, positions);
     }
   }
 
@@ -368,21 +503,50 @@ const Drawing = (() => {
 
   function receiveStroke(stroke) {
     strokes.push(stroke);
-    // Clear intermediate stroking data for this stroke
     intermediateStrokeIds.delete(stroke.strokeId);
-    // Redraw all to clear any intermediate stroking artifacts
     if (intermediateStrokeIds.size === 0) {
       redrawAll();
     } else {
-      drawFullStroke(stroke);
+      invalidateCellCache();
+      const cw = container.clientWidth;
+      const positions = getCellPositions();
+      drawSmoothStroke(stroke, cw, positions);
     }
   }
 
   function receiveStroking(data) {
-    // Track intermediate strokes for cleanup
     intermediateStrokeIds.add(data.strokeId);
-    // Real-time streaming — draw points as they arrive
-    drawStrokeSegment(data, data.points || []);
+    if (!ctx || !data.points || data.points.length === 0) return;
+
+    if (!cellPosCache) buildCellCache();
+    const cw = container.clientWidth;
+    const positions = cellPosCache;
+
+    ctx.save();
+    ctx.globalAlpha = data.alpha || 1;
+    ctx.strokeStyle = data.color || '#000';
+    ctx.lineWidth = data.width || 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const pts = data.points;
+    if (pts.length === 1) {
+      const { x, y } = ptToPixelXY(pts[0], cw, positions);
+      ctx.beginPath();
+      ctx.arc(x, y, (data.width || 4) / 2, 0, Math.PI * 2);
+      ctx.fillStyle = data.color || '#000';
+      ctx.fill();
+    } else {
+      const p0 = ptToPixelXY(pts[0], cw, positions);
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < pts.length; i++) {
+        const p = ptToPixelXY(pts[i], cw, positions);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function receiveUndo(data) {
@@ -406,18 +570,21 @@ const Drawing = (() => {
   function receiveClear() {
     strokes = [];
     intermediateStrokeIds.clear();
+    invalidateCellCache();
     redrawAll();
   }
 
   function receiveFull(data) {
     strokes = data.strokes || [];
     intermediateStrokeIds.clear();
+    invalidateCellCache();
     redrawAll();
   }
 
   function clearAll() {
     strokes = [];
     intermediateStrokeIds.clear();
+    invalidateCellCache();
     if (ctx && canvas && container) {
       ctx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
     }
