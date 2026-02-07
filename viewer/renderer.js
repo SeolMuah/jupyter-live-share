@@ -2,7 +2,8 @@
 
 const Renderer = (() => {
   const HIGHLIGHT_DEBOUNCE_MS = 150;
-  const CURSOR_TIMEOUT_MS = 2000;
+  // 커서 타임아웃 제거: 선생님 커서는 마지막 위치에 계속 표시
+  // 셀 전환 시 removeCursor()로 정리, 세션 종료 시 resetCursorState()로 정리
   let highlightTimers = {};
 
   /**
@@ -971,7 +972,6 @@ const Renderer = (() => {
 
     // === Fast path: 같은 셀이면 커서 오버레이만 업데이트 (DOM 재생성 없음) ===
     if (cellIndex === currentCursorCellIndex) {
-      cursorTimeout = setTimeout(() => removeCursor(), CURSOR_TIMEOUT_MS);
       removeCursorOverlays();
 
       const rawSourceCode = cellElement.querySelector('.markup-raw-source code');
@@ -1000,8 +1000,6 @@ const Renderer = (() => {
     // === Full path: 다른 셀로 이동 ===
     removeCursor();
     currentCursorCellIndex = cellIndex;
-    // removeCursor()가 cursorTimeout을 null로 초기화하므로, 새 셀에 대한 타임아웃을 재설정
-    cursorTimeout = setTimeout(() => removeCursor(), CURSOR_TIMEOUT_MS);
 
     // 마크다운 셀: raw source 모드 전환
     const markupWrapper = cellElement.querySelector('.cell-markup-wrapper');
@@ -1090,10 +1088,18 @@ const Renderer = (() => {
     // instead of full parent width, causing narrow/misaligned selection overlays
     codeEl.style.display = 'block';
 
+    // ★ Range API로 정확한 커서 위치 계산 (Canvas measureText fallback)
+    // Canvas measureText는 font hinting/sub-pixel 차이로 한 칸 어긋날 수 있음
+    // getCursorPositionByRange 1회 호출로 left/top 동시 획득 (트리 워크 최소화)
+    const rangePos = getCursorPositionByRange(codeEl, targetLine, targetChar);
+    const cursorTop = rangePos ? rangePos.top : targetLine * lineHeight;
+    const lineText = lines[targetLine] || '';
+    const cursorLeft = rangePos ? rangePos.left : getCharOffset(codeEl, lineText, targetChar);
+
     // Create line highlight (full line background)
     const lineHighlight = document.createElement('div');
     lineHighlight.className = 'teacher-line-highlight';
-    lineHighlight.style.top = `${targetLine * lineHeight}px`;
+    lineHighlight.style.top = `${cursorTop}px`;
     lineHighlight.style.height = `${lineHeight}px`;
     codeEl.appendChild(lineHighlight);
 
@@ -1101,12 +1107,8 @@ const Renderer = (() => {
     cursorElement = document.createElement('div');
     cursorElement.className = 'teacher-cursor';
 
-    // Calculate character offset using actual font metrics
-    const lineText = lines[targetLine] || '';
-    const charWidth = getCharOffset(codeEl, lineText, targetChar);
-
-    cursorElement.style.top = `${targetLine * lineHeight}px`;
-    cursorElement.style.left = `${charWidth}px`;
+    cursorElement.style.top = `${cursorTop}px`;
+    cursorElement.style.left = `${cursorLeft}px`;
     cursorElement.style.height = `${lineHeight}px`;
 
     codeEl.appendChild(cursorElement);
@@ -1117,9 +1119,6 @@ const Renderer = (() => {
       // ★ 라인 범위도 텍스트 길이로 자르지 않는다 (race condition 방지)
       const startLine = Math.max(0, selectionStart.line);
       const endLine = Math.max(0, selectionEnd.line);
-
-      const startLineText = lines[startLine] || '';
-      const endLineText = lines[endLine] || '';
 
       // 선택 영역 컨테이너 (여러 라인 블록을 담음)
       selectionElement = document.createElement('div');
@@ -1133,23 +1132,27 @@ const Renderer = (() => {
       selectionElement.style.zIndex = '40';
 
       if (startLine === endLine) {
-        // 단일 라인 선택
-        const startOffset = getCharOffset(codeEl, startLineText, selectionStart.character);
-        const endOffset = getCharOffset(codeEl, endLineText, selectionEnd.character);
+        // 단일 라인 선택 — 1회 Range 호출로 top/startLeft 동시 획득
+        const startPos = getCursorPositionByRange(codeEl, startLine, selectionStart.character);
+        const startOffset = startPos ? startPos.left : getLeftAt(codeEl, lines, startLine, selectionStart.character);
+        const endOffset = getLeftAt(codeEl, lines, endLine, selectionEnd.character);
+        const selTop = startPos ? startPos.top : startLine * lineHeight;
         const block = document.createElement('div');
         block.className = 'teacher-selection';
-        block.style.top = `${startLine * lineHeight}px`;
+        block.style.top = `${selTop}px`;
         block.style.left = `${startOffset}px`;
         block.style.width = `${Math.max(2, endOffset - startOffset)}px`;
         block.style.height = `${lineHeight}px`;
         selectionElement.appendChild(block);
       } else {
-        // 멀티라인: 각 라인별 블록 생성
+        // 멀티라인: Range 1회 호출로 각 라인의 top/left 동시 획득
         // 첫 번째 라인: startChar → 라인 끝
-        const startOffset = getCharOffset(codeEl, startLineText, selectionStart.character);
+        const startPos = getCursorPositionByRange(codeEl, startLine, selectionStart.character);
+        const startOffset = startPos ? startPos.left : getLeftAt(codeEl, lines, startLine, selectionStart.character);
+        const startTop = startPos ? startPos.top : startLine * lineHeight;
         const firstBlock = document.createElement('div');
         firstBlock.className = 'teacher-selection';
-        firstBlock.style.top = `${startLine * lineHeight}px`;
+        firstBlock.style.top = `${startTop}px`;
         firstBlock.style.left = `${startOffset}px`;
         firstBlock.style.width = `calc(100% - ${startOffset}px)`;
         firstBlock.style.height = `${lineHeight}px`;
@@ -1157,9 +1160,10 @@ const Renderer = (() => {
 
         // 중간 라인: 전체 너비
         if (endLine - startLine > 1) {
+          const midTop = getTopAt(codeEl, startLine + 1, lineHeight);
           const midBlock = document.createElement('div');
           midBlock.className = 'teacher-selection';
-          midBlock.style.top = `${(startLine + 1) * lineHeight}px`;
+          midBlock.style.top = `${midTop}px`;
           midBlock.style.left = '0';
           midBlock.style.width = '100%';
           midBlock.style.height = `${(endLine - startLine - 1) * lineHeight}px`;
@@ -1167,11 +1171,13 @@ const Renderer = (() => {
         }
 
         // 마지막 라인: 라인 시작 → endChar
-        const endOffset = getCharOffset(codeEl, endLineText, selectionEnd.character);
+        const endPos = getCursorPositionByRange(codeEl, endLine, selectionEnd.character);
+        const endOffset = endPos ? endPos.left : getLeftAt(codeEl, lines, endLine, selectionEnd.character);
         if (endOffset > 0) {
+          const endTop = endPos ? endPos.top : endLine * lineHeight;
           const lastBlock = document.createElement('div');
           lastBlock.className = 'teacher-selection';
-          lastBlock.style.top = `${endLine * lineHeight}px`;
+          lastBlock.style.top = `${endTop}px`;
           lastBlock.style.left = '0';
           lastBlock.style.width = `${endOffset}px`;
           lastBlock.style.height = `${lineHeight}px`;
@@ -1246,6 +1252,71 @@ const Renderer = (() => {
       ? fullWidth / lineText.length
       : measureCanvas.measureText('m').width; // fallback: 'm' 문자폭
     return fullWidth + (charIndex - lineText.length) * avgCharWidth;
+  }
+
+  /**
+   * DOM Range 기반 커서 위치 측정 — 브라우저 레이아웃 엔진이 직접 계산한 좌표 반환
+   * Canvas measureText는 font hinting, sub-pixel rendering, 합자(ligature) 등에서
+   * 실제 DOM 렌더링과 미세하게 달라질 수 있어 한 칸 정도 차이가 발생할 수 있음.
+   * Range API는 브라우저가 실제로 렌더링한 위치를 정확히 반환한다.
+   */
+  function getCursorPositionByRange(codeEl, targetLine, targetChar) {
+    try {
+      const walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT);
+      let line = 0;
+      let col = 0;
+      let node;
+
+      while ((node = walker.nextNode())) {
+        const text = node.textContent || '';
+        for (let i = 0; i < text.length; i++) {
+          if (line === targetLine && col === targetChar) {
+            return getRangeRect(codeEl, node, i);
+          }
+          if (text[i] === '\n') {
+            line++;
+            col = 0;
+          } else {
+            col++;
+          }
+        }
+      }
+    } catch (e) {
+      // DOM 변경 중 walker 오류 — fallback 사용
+    }
+    return null;
+  }
+
+  function getRangeRect(codeEl, node, offset) {
+    try {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      const rects = range.getClientRects();
+      if (rects.length === 0) return null;
+      const codeRect = codeEl.getBoundingClientRect();
+      return {
+        left: rects[0].left - codeRect.left + codeEl.scrollLeft,
+        top: rects[0].top - codeRect.top + codeEl.scrollTop,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Range 기반 left 오프셋 (Canvas fallback) */
+  function getLeftAt(codeEl, lines, targetLine, targetChar) {
+    const pos = getCursorPositionByRange(codeEl, targetLine, targetChar);
+    if (pos) return pos.left;
+    const lineText = lines[targetLine] || '';
+    return getCharOffset(codeEl, lineText, targetChar);
+  }
+
+  /** Range 기반 top 오프셋 (lineHeight fallback) */
+  function getTopAt(codeEl, targetLine, lineHeight) {
+    const pos = getCursorPositionByRange(codeEl, targetLine, 0);
+    if (pos) return pos.top;
+    return targetLine * lineHeight;
   }
 
   function removeCursor() {
@@ -1347,9 +1418,8 @@ const Renderer = (() => {
     const contentEl = document.getElementById('document-content');
     if (!contentEl) return;
 
-    // Reset timeout
+    // 기존 타임아웃 취소 (혹시 남아있을 경우 대비)
     if (cursorTimeout) clearTimeout(cursorTimeout);
-    cursorTimeout = setTimeout(() => removeDocumentCursor(), CURSOR_TIMEOUT_MS);
 
     // Markdown 렌더 모드면 raw 소스 모드로 전환 (선생님과 동일한 뷰)
     if (mdDocViewMode === 'rendered' && contentEl.querySelector('.cell-markup')) {
