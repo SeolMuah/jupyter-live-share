@@ -3,8 +3,11 @@
 const Drawing = (() => {
   'use strict';
 
-  let canvas = null;
-  let ctx = null;
+  // 2-canvas architecture: staticCanvas (completed strokes) + canvas (active stroke)
+  let staticCanvas = null;
+  let staticCtx = null;
+  let canvas = null; // active stroke canvas
+  let ctx = null;    // active stroke context
   let container = null; // #notebook-container
   let isTeacher = false;
   let drawingMode = false;
@@ -15,8 +18,10 @@ const Drawing = (() => {
   let currentPoints = []; // points for WS batch sending
   let batchTimer = null;
   let isErasing = false; // eraser drag state (separate from currentStroke)
-  let lastDrawnIndex = 0; // incremental drawing: last rendered point index
   const BATCH_INTERVAL = 50; // ms
+
+  // rAF batching
+  let rafId = null;
 
   // Tool state
   let currentTool = 'pen'; // 'pen' | 'highlighter' | 'eraser'
@@ -28,6 +33,7 @@ const Drawing = (() => {
 
   // ResizeObserver debounce
   let resizeTimer = null;
+  let resizeObserver = null;
   const RESIZE_DEBOUNCE_MS = 100;
 
   // Intermediate stroking state (for clearing on final stroke)
@@ -120,18 +126,24 @@ const Drawing = (() => {
       document.body.style.overflowX = 'auto';
     }
 
-    // Create canvas
+    container.style.position = 'relative';
+
+    // Create static canvas (completed strokes, bottom layer)
+    staticCanvas = document.createElement('canvas');
+    staticCanvas.id = 'draw-canvas-static';
+    container.appendChild(staticCanvas);
+    staticCtx = staticCanvas.getContext('2d', { desynchronized: true });
+
+    // Create active canvas (current stroke + events, top layer)
     canvas = document.createElement('canvas');
     canvas.id = 'draw-canvas';
-    container.style.position = 'relative';
     container.appendChild(canvas);
-
-    ctx = canvas.getContext('2d');
+    ctx = canvas.getContext('2d', { desynchronized: true });
 
     resizeCanvas();
 
     // ResizeObserver to track content height changes (debounced)
-    const ro = new ResizeObserver(() => {
+    resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         invalidateCellCache();
@@ -139,7 +151,7 @@ const Drawing = (() => {
         redrawAll();
       }, RESIZE_DEBOUNCE_MS);
     });
-    ro.observe(container);
+    resizeObserver.observe(container);
 
     // Toolbar setup — tools panel on right side, toggle in footer
     toolsPanel = document.getElementById('draw-tools-panel');
@@ -154,16 +166,22 @@ const Drawing = (() => {
   }
 
   function resizeCanvas() {
-    if (!canvas || !container) return;
+    if (!canvas || !staticCanvas || !container) return;
     const dpr = window.devicePixelRatio || 1;
     const w = container.clientWidth;
     const h = container.scrollHeight;
+
+    // Resize both canvases
+    staticCanvas.style.width = w + 'px';
+    staticCanvas.style.height = h + 'px';
+    staticCanvas.width = w * dpr;
+    staticCanvas.height = h * dpr;
+    staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
@@ -284,17 +302,14 @@ const Drawing = (() => {
       points: [pt],
     };
     currentPoints = [pt];
-    lastDrawnIndex = 0;
 
-    // Draw initial dot immediately using cached pixel coords
-    if (ctx) {
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = currentColor;
-      ctx.beginPath();
-      ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
+    // Draw initial dot on active canvas
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = currentColor;
+    ctx.beginPath();
+    ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
 
     // Start batch timer for WS sending
     batchTimer = setInterval(() => {
@@ -359,24 +374,50 @@ const Drawing = (() => {
       currentPoints.push(pt);
     }
 
-    // Draw new segments using cached pixel coords — zero DOM reads, zero function calls
+    // Schedule rAF to draw on active canvas (no direct draw here)
+    scheduleActiveRedraw();
+  }
+
+  function scheduleActiveRedraw() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      drawActiveStroke();
+    });
+  }
+
+  function drawActiveStroke() {
+    if (!currentStroke || !ctx) return;
     const pts = currentStroke.points;
-    if (pts.length >= 2) {
-      const start = Math.max(0, lastDrawnIndex);
-      ctx.globalAlpha = currentStroke.alpha;
-      ctx.strokeStyle = currentStroke.color;
-      ctx.lineWidth = currentStroke.width;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+    if (pts.length < 1) return;
+
+    const w = container.clientWidth;
+    const h = container.scrollHeight;
+
+    // Clear active canvas and redraw current stroke fully
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.globalAlpha = currentStroke.alpha;
+    ctx.strokeStyle = currentStroke.color;
+    ctx.lineWidth = currentStroke.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (pts.length === 1) {
+      ctx.fillStyle = currentStroke.color;
       ctx.beginPath();
-      ctx.moveTo(pts[start]._x, pts[start]._y);
-      for (let i = start + 1; i < pts.length; i++) {
+      ctx.arc(pts[0]._x, pts[0]._y, currentStroke.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(pts[0]._x, pts[0]._y);
+      for (let i = 1; i < pts.length; i++) {
         ctx.lineTo(pts[i]._x, pts[i]._y);
       }
       ctx.stroke();
-      ctx.globalAlpha = 1;
-      lastDrawnIndex = pts.length - 1;
     }
+
+    ctx.globalAlpha = 1;
   }
 
   function onPointerUp(e) {
@@ -393,6 +434,12 @@ const Drawing = (() => {
       batchTimer = null;
     }
 
+    // Cancel pending rAF
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+
     // Flush remaining unsent points
     if (currentPoints.length > 0) {
       WsClient.send('draw:stroking', {
@@ -405,14 +452,21 @@ const Drawing = (() => {
       });
     }
 
+    // Move completed stroke to static canvas
     strokes.push(currentStroke);
+
+    invalidateCellCache();
+    const cw = container.clientWidth;
+    const positions = getCellPositions();
+    drawSmoothStroke(staticCtx, currentStroke, cw, positions);
+
+    // Clear active canvas
+    ctx.clearRect(0, 0, cw, container.scrollHeight);
+
     WsClient.send('draw:stroke', currentStroke);
 
     currentStroke = null;
     currentPoints = [];
-    lastDrawnIndex = 0;
-    // Incremental rendering is already on canvas — no redrawAll() needed.
-    // Bezier smoothing happens on resize, undo, clear, or student receive.
   }
 
   // --- Eraser ---
@@ -444,58 +498,59 @@ const Drawing = (() => {
 
   // --- Smooth Drawing (Quadratic Bezier Curves) ---
 
-  function drawSmoothStroke(stroke, cw, positions) {
-    if (!ctx || !stroke.points || stroke.points.length === 0) return;
+  function drawSmoothStroke(targetCtx, stroke, cw, positions) {
+    if (!targetCtx || !stroke.points || stroke.points.length === 0) return;
 
     const pts = stroke.points;
 
-    ctx.save();
-    ctx.globalAlpha = stroke.alpha;
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    targetCtx.globalAlpha = stroke.alpha;
+    targetCtx.strokeStyle = stroke.color;
+    targetCtx.lineWidth = stroke.width;
+    targetCtx.lineCap = 'round';
+    targetCtx.lineJoin = 'round';
 
     if (pts.length === 1) {
       const { x, y } = ptToPixelXY(pts[0], cw, positions);
-      ctx.beginPath();
-      ctx.arc(x, y, stroke.width / 2, 0, Math.PI * 2);
-      ctx.fillStyle = stroke.color;
-      ctx.fill();
+      targetCtx.beginPath();
+      targetCtx.arc(x, y, stroke.width / 2, 0, Math.PI * 2);
+      targetCtx.fillStyle = stroke.color;
+      targetCtx.fill();
     } else if (pts.length === 2) {
       const p0 = ptToPixelXY(pts[0], cw, positions);
       const p1 = ptToPixelXY(pts[1], cw, positions);
-      ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
-      ctx.stroke();
+      targetCtx.beginPath();
+      targetCtx.moveTo(p0.x, p0.y);
+      targetCtx.lineTo(p1.x, p1.y);
+      targetCtx.stroke();
     } else {
       const p0 = ptToPixelXY(pts[0], cw, positions);
-      ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
+      targetCtx.beginPath();
+      targetCtx.moveTo(p0.x, p0.y);
 
       for (let i = 1; i < pts.length - 1; i++) {
         const cp = ptToPixelXY(pts[i], cw, positions);
         const next = ptToPixelXY(pts[i + 1], cw, positions);
-        ctx.quadraticCurveTo(cp.x, cp.y, (cp.x + next.x) / 2, (cp.y + next.y) / 2);
+        targetCtx.quadraticCurveTo(cp.x, cp.y, (cp.x + next.x) / 2, (cp.y + next.y) / 2);
       }
 
       const last = ptToPixelXY(pts[pts.length - 1], cw, positions);
-      ctx.lineTo(last.x, last.y);
-      ctx.stroke();
+      targetCtx.lineTo(last.x, last.y);
+      targetCtx.stroke();
     }
 
-    ctx.restore();
+    targetCtx.globalAlpha = 1;
   }
 
   function redrawAll() {
-    if (!ctx || !canvas || !container) return;
+    if (!staticCtx || !staticCanvas || !container) return;
     invalidateCellCache();
     const cw = container.clientWidth;
     const positions = getCellPositions();
-    ctx.clearRect(0, 0, cw, container.scrollHeight);
+    // Clear both canvases
+    staticCtx.clearRect(0, 0, cw, container.scrollHeight);
+    if (ctx) ctx.clearRect(0, 0, cw, container.scrollHeight);
     for (const stroke of strokes) {
-      drawSmoothStroke(stroke, cw, positions);
+      drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
   }
 
@@ -510,43 +565,42 @@ const Drawing = (() => {
       invalidateCellCache();
       const cw = container.clientWidth;
       const positions = getCellPositions();
-      drawSmoothStroke(stroke, cw, positions);
+      drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
   }
 
   function receiveStroking(data) {
     intermediateStrokeIds.add(data.strokeId);
-    if (!ctx || !data.points || data.points.length === 0) return;
+    if (!staticCtx || !data.points || data.points.length === 0) return;
 
     if (!cellPosCache) buildCellCache();
     const cw = container.clientWidth;
     const positions = cellPosCache;
 
-    ctx.save();
-    ctx.globalAlpha = data.alpha || 1;
-    ctx.strokeStyle = data.color || '#000';
-    ctx.lineWidth = data.width || 4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    staticCtx.globalAlpha = data.alpha || 1;
+    staticCtx.strokeStyle = data.color || '#000';
+    staticCtx.lineWidth = data.width || 4;
+    staticCtx.lineCap = 'round';
+    staticCtx.lineJoin = 'round';
 
     const pts = data.points;
     if (pts.length === 1) {
       const { x, y } = ptToPixelXY(pts[0], cw, positions);
-      ctx.beginPath();
-      ctx.arc(x, y, (data.width || 4) / 2, 0, Math.PI * 2);
-      ctx.fillStyle = data.color || '#000';
-      ctx.fill();
+      staticCtx.beginPath();
+      staticCtx.arc(x, y, (data.width || 4) / 2, 0, Math.PI * 2);
+      staticCtx.fillStyle = data.color || '#000';
+      staticCtx.fill();
     } else {
       const p0 = ptToPixelXY(pts[0], cw, positions);
-      ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
+      staticCtx.beginPath();
+      staticCtx.moveTo(p0.x, p0.y);
       for (let i = 1; i < pts.length; i++) {
         const p = ptToPixelXY(pts[i], cw, positions);
-        ctx.lineTo(p.x, p.y);
+        staticCtx.lineTo(p.x, p.y);
       }
-      ctx.stroke();
+      staticCtx.stroke();
     }
-    ctx.restore();
+    staticCtx.globalAlpha = 1;
   }
 
   function receiveUndo(data) {
@@ -585,9 +639,50 @@ const Drawing = (() => {
     strokes = [];
     intermediateStrokeIds.clear();
     invalidateCellCache();
+    if (staticCtx && staticCanvas && container) {
+      staticCtx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
+    }
     if (ctx && canvas && container) {
       ctx.clearRect(0, 0, container.clientWidth, container.scrollHeight);
     }
+  }
+
+  function destroy() {
+    // Cancel any pending operations
+    if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
+    if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+
+    // Clear state
+    strokes = [];
+    currentStroke = null;
+    currentPoints = [];
+    isErasing = false;
+    intermediateStrokeIds.clear();
+    invalidateCellCache();
+
+    // Reset drawing mode
+    drawingMode = false;
+    const toggle = document.getElementById('draw-toggle');
+    if (toggle) {
+      toggle.classList.remove('active');
+      toggle.style.display = 'none';
+    }
+
+    // Hide tools panel
+    if (toolsPanel) toolsPanel.style.display = 'none';
+
+    // Remove canvases from DOM
+    if (staticCanvas && staticCanvas.parentNode) {
+      staticCanvas.parentNode.removeChild(staticCanvas);
+    }
+    if (canvas && canvas.parentNode) {
+      canvas.parentNode.removeChild(canvas);
+    }
+    staticCanvas = null; staticCtx = null;
+    canvas = null; ctx = null;
+    container = null;
   }
 
   return {
@@ -599,5 +694,6 @@ const Drawing = (() => {
     receiveClear,
     receiveFull,
     clearAll,
+    destroy,
   };
 })();

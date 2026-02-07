@@ -22,6 +22,11 @@
   --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --footer-height: 50px; /* fixed footer 높이 */
+  --chat-width: 340px;
+  --chat-min-width: 240px;
+  --chat-max-width: 600px;
+  --resize-handle-width: 4px;
+  --header-height: 40px;
 }
 
 /* === Dark Mode === */
@@ -184,12 +189,42 @@ header {
   padding: 4px;
 }
 
+/* === App Layout (flex split-pane) === */
+#app-layout {
+  display: flex;
+  min-height: calc(100vh - var(--header-height));
+}
+
 /* === Notebook Container === */
 #notebook-container {
-  max-width: 960px;
-  margin: 0 auto;
+  flex: 1;
+  min-width: 0;
   padding: 16px;
   padding-bottom: 16px;
+}
+
+#notebook-cells {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* === Chat Resize Handle === */
+#chat-resize-handle {
+  width: var(--resize-handle-width);
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  display: none;
+}
+
+#chat-resize-handle.visible {
+  display: block;
+}
+
+#chat-resize-handle:hover,
+#chat-resize-handle.active {
+  background: var(--accent);
 }
 
 /* Fixed footer를 위한 하단 여백 - ::after로 확실하게 공간 확보 */
@@ -747,23 +782,22 @@ footer label {
   padding: 16px 20px;
 }
 
-/* === Chat Panel === */
+/* === Chat Panel (desktop: sticky inline sidebar) === */
 .chat-panel {
-  position: fixed;
-  top: 0;
-  right: -360px;
-  width: 340px;
-  height: 100%;
+  position: sticky;
+  top: var(--header-height);
+  height: calc(100vh - var(--header-height));
+  width: var(--chat-width);
+  flex-shrink: 0;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   z-index: 200;
-  transition: right 0.3s ease;
 }
 
-.chat-panel.open {
-  right: 0;
+.chat-panel.collapsed {
+  display: none;
 }
 
 .chat-header {
@@ -777,6 +811,29 @@ footer label {
   flex-shrink: 0;
 }
 
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--header-text);
+  cursor: pointer;
+  padding: 2px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.chat-collapse-btn:hover {
+  opacity: 1;
+}
+
 .chat-close-btn {
   background: none;
   border: none;
@@ -785,6 +842,7 @@ footer label {
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
+  display: none; /* hidden on desktop, shown on mobile */
 }
 
 .chat-messages {
@@ -1146,8 +1204,42 @@ footer label {
 
 /* === Responsive === */
 @media (max-width: 768px) {
+  #app-layout {
+    display: block;
+  }
+
   #notebook-container {
     padding: 8px;
+  }
+
+  #chat-resize-handle {
+    display: none !important;
+  }
+
+  .chat-panel {
+    position: fixed;
+    top: 0;
+    right: -100%;
+    width: 100%;
+    height: 100%;
+    transition: right 0.3s ease;
+  }
+
+  .chat-panel.collapsed {
+    display: flex; /* override desktop display:none, use right for animation */
+    right: -100%;
+  }
+
+  .chat-panel.open {
+    right: 0;
+  }
+
+  .chat-collapse-btn {
+    display: none;
+  }
+
+  .chat-close-btn {
+    display: block;
   }
 
   .exec-label {
@@ -1162,11 +1254,6 @@ footer label {
 
   .cell-source code {
     font-size: 0.8rem;
-  }
-
-  .chat-panel {
-    width: 100%;
-    right: -100%;
   }
 
   .poll-buttons {
@@ -1297,11 +1384,19 @@ footer label {
 /* Teacher viewport indicator 제거 — 스크롤 동기화는 cursor:position이 전담 */
 
 /* === Drawing Canvas Overlay === */
-#draw-canvas {
+#draw-canvas-static {
   position: absolute;
   top: 0;
   left: 0;
   z-index: 300;
+  pointer-events: none;
+}
+
+#draw-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 301;
   pointer-events: none;
 }
 

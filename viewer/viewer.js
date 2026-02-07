@@ -55,6 +55,8 @@
   const chatInput = document.getElementById('chat-input');
   const chatSend = document.getElementById('chat-send');
   const chatClose = document.getElementById('chat-close');
+  const chatCollapse = document.getElementById('chat-collapse');
+  const chatResizeHandle = document.getElementById('chat-resize-handle');
   const btnChat = document.getElementById('btn-chat');
 
   // Poll elements
@@ -120,7 +122,33 @@
       if (e.key === 'Enter') sendChatMessage();
     });
     chatClose?.addEventListener('click', () => toggleChat(false));
+    chatCollapse?.addEventListener('click', () => toggleChat(false));
     btnChat?.addEventListener('click', () => toggleChat(!chatVisible));
+
+    // Chat: restore saved width
+    const savedChatWidth = localStorage.getItem('jls-chat-width');
+    if (savedChatWidth) {
+      document.documentElement.style.setProperty('--chat-width', savedChatWidth + 'px');
+    }
+
+    // Chat: default open on desktop (unless VS Code Webview)
+    if (!isVSCodeWebview) {
+      const isMobile = window.innerWidth <= 768;
+      const savedChatState = localStorage.getItem('jls-chat-open');
+      if (!isMobile && savedChatState !== 'false') {
+        toggleChat(true);
+      }
+    }
+
+    // Chat resize drag
+    initChatResize();
+
+    // Responsive: handle mobile ↔ desktop transitions (debounced)
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(handleWindowResize, 100);
+    });
 
     // Poll events (teacher only)
     btnPoll?.addEventListener('click', showNewPollModal);
@@ -467,6 +495,7 @@
 
   function handleSessionEnd() {
     WsClient.disconnect();
+    Drawing.destroy();
     notebookContainer.innerHTML = '';
     const endMsg = document.createElement('div');
     endMsg.className = 'session-ended';
@@ -588,15 +617,39 @@
 
   function toggleChat(show) {
     chatVisible = typeof show === 'boolean' ? show : !chatVisible;
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+      // Mobile: fixed overlay with slide-in animation
+      if (chatVisible) {
+        chatPanel.classList.add('open');
+        chatPanel.classList.remove('collapsed');
+      } else {
+        chatPanel.classList.remove('open');
+      }
+    } else {
+      // Desktop: inline sidebar with collapsed class
+      if (chatVisible) {
+        chatPanel.classList.remove('collapsed');
+        if (chatResizeHandle) chatResizeHandle.classList.add('visible');
+      } else {
+        chatPanel.classList.add('collapsed');
+        if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
+      }
+    }
+
     if (chatVisible) {
-      chatPanel.classList.add('open');
       unreadCount = 0;
       updateChatBadge();
       chatInput.focus();
       chatMessages.scrollTop = chatMessages.scrollHeight;
-    } else {
-      chatPanel.classList.remove('open');
     }
+
+    // Save state
+    localStorage.setItem('jls-chat-open', chatVisible ? 'true' : 'false');
+
+    // Update draw tools position
+    updateDrawToolsPosition();
   }
 
   function updateChatBadge() {
@@ -898,6 +951,102 @@
 
   function downloadNotebook() {
     window.open('/download', '_blank');
+  }
+
+  // === Chat Resize ===
+
+  function initChatResize() {
+    if (!chatResizeHandle) return;
+
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+    let minW = 240;
+    let maxW = 600;
+
+    chatResizeHandle.addEventListener('mousedown', (e) => {
+      if (window.innerWidth <= 768) return; // no resize on mobile
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = chatPanel.offsetWidth;
+      const styles = getComputedStyle(document.documentElement);
+      minW = parseInt(styles.getPropertyValue('--chat-min-width')) || 240;
+      maxW = parseInt(styles.getPropertyValue('--chat-max-width')) || 600;
+      chatResizeHandle.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      // Dragging left increases chat width (handle is left of chat panel)
+      const delta = startX - e.clientX;
+      const newWidth = Math.min(maxW, Math.max(minW, startWidth + delta));
+      document.documentElement.style.setProperty('--chat-width', newWidth + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!isResizing) return;
+      isResizing = false;
+      chatResizeHandle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Save width
+      const currentWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-width'));
+      if (currentWidth) {
+        localStorage.setItem('jls-chat-width', currentWidth);
+      }
+      updateDrawToolsPosition();
+    });
+  }
+
+  // === Draw Tools Position ===
+
+  function updateDrawToolsPosition() {
+    const drawToolsPanel = document.getElementById('draw-tools-panel');
+    if (!drawToolsPanel) return;
+    const isMobile = window.innerWidth <= 768;
+
+    if (!isMobile && chatVisible && chatPanel && !chatPanel.classList.contains('collapsed')) {
+      const chatW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-width')) || 340;
+      const handleW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--resize-handle-width')) || 4;
+      drawToolsPanel.style.right = (chatW + handleW + 12) + 'px';
+    } else {
+      drawToolsPanel.style.right = '12px';
+    }
+  }
+
+  // === Window Resize (mobile ↔ desktop) ===
+
+  let lastIsMobile = window.innerWidth <= 768;
+
+  function handleWindowResize() {
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile !== lastIsMobile) {
+      lastIsMobile = isMobile;
+      // Reapply chat state for new mode
+      if (isMobile) {
+        // Switching to mobile: remove desktop classes, apply mobile classes
+        chatPanel.classList.remove('collapsed');
+        if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
+        if (!chatVisible) {
+          chatPanel.classList.remove('open');
+        } else {
+          chatPanel.classList.add('open');
+        }
+      } else {
+        // Switching to desktop: remove mobile classes, apply desktop classes
+        chatPanel.classList.remove('open');
+        if (chatVisible) {
+          chatPanel.classList.remove('collapsed');
+          if (chatResizeHandle) chatResizeHandle.classList.add('visible');
+        } else {
+          chatPanel.classList.add('collapsed');
+        }
+      }
+    }
+    updateDrawToolsPosition();
   }
 
 })();
