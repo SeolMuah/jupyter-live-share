@@ -146,6 +146,51 @@
 
     // Drawing module initialization
     Drawing.init(isTeacherPreview);
+
+    // Teacher scroll sync — 선생님 프리뷰에서만 활성
+    if (isTeacherPreview) {
+      let scrollThrottleTimer = null;
+      const SCROLL_THROTTLE_MS = 150;
+
+      window.addEventListener('scroll', () => {
+        if (scrollThrottleTimer) clearTimeout(scrollThrottleTimer);
+        scrollThrottleTimer = setTimeout(() => {
+          scrollThrottleTimer = null;
+          const anchor = computeScrollAnchor();
+          if (anchor) WsClient.send('scroll:sync', anchor);
+        }, SCROLL_THROTTLE_MS);
+      }, { passive: true });
+    }
+  }
+
+  function computeScrollAnchor() {
+    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const viewportTop = window.scrollY + headerHeight;
+
+    if (documentType === 'notebook') {
+      const cells = document.querySelectorAll('#notebook-cells .cell');
+      let anchorCell = null;
+      let anchorIndex = 0;
+
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i].offsetTop + cells[i].offsetHeight > viewportTop) {
+          anchorCell = cells[i];
+          anchorIndex = i;
+          break;
+        }
+      }
+      if (!anchorCell) return null;
+
+      const offsetRatio = Math.max(0, Math.min(1,
+        (viewportTop - anchorCell.offsetTop) / (anchorCell.offsetHeight || 1)
+      ));
+      return { type: 'notebook', cellIndex: anchorIndex, offsetRatio };
+    }
+
+    // Plaintext: 비율 기반
+    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    if (maxScroll <= 0) return null;
+    return { type: 'plaintext', scrollRatio: window.scrollY / maxScroll };
   }
 
   // === Name Flow ===
@@ -236,12 +281,17 @@
         } else {
           if (documentType === 'notebook') {
             Renderer.showTeacherCursor(msg.data);
+            lastCursorScrollTime = Date.now();
           }
         }
         break;
 
       case 'viewport:sync':
         handleViewportSync(msg.data);
+        break;
+
+      case 'scroll:sync':
+        handleScrollSync(msg.data);
         break;
 
       case 'viewers:count':
@@ -425,6 +475,26 @@
       if (autoScroll && autoScroll.checked && typeof data.firstVisibleLine === 'number') {
         Renderer.scrollToLine(data.firstVisibleLine);
       }
+    }
+  }
+
+  // === Scroll Sync (선생님→학생 스크롤 동기화) ===
+
+  function handleScrollSync(data) {
+    // 선생님 프리뷰는 수신 무시 (자신이 발신자)
+    if (isTeacherPreview) return;
+
+    // Auto-scroll 체크
+    const autoScroll = document.getElementById('auto-scroll');
+    if (!autoScroll || !autoScroll.checked) return;
+
+    // 커서 스크롤 우선 (300ms 이내 cursor:position이 있었으면 무시)
+    if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
+
+    if (data.type === 'notebook' && documentType === 'notebook') {
+      Renderer.scrollToNotebookAnchor(data.cellIndex, data.offsetRatio);
+    } else if (data.type === 'plaintext' && documentType === 'plaintext') {
+      Renderer.scrollToRatio(data.scrollRatio);
     }
   }
 

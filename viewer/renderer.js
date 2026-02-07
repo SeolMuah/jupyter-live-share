@@ -669,6 +669,23 @@ const Renderer = (() => {
     });
   }
 
+  /**
+   * Scroll notebook to a cell-relative anchor position
+   * Uses cellIndex + offsetRatio for screen-size-independent positioning
+   */
+  function scrollToNotebookAnchor(cellIndex, offsetRatio) {
+    const cellEl = document.getElementById('cell-' + cellIndex);
+    if (!cellEl) return;
+
+    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const targetScroll = cellEl.offsetTop + (cellEl.offsetHeight * offsetRatio) - headerHeight;
+
+    // 이미 5px 이내면 스크롤 생략 (jitter 방지)
+    if (Math.abs(window.scrollY - targetScroll) < 5) return;
+
+    window.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' });
+  }
+
   // Teacher viewport indicator 제거 — 선생님 스크롤이 학생 화면에 영향 없음
 
   /**
@@ -1472,5 +1489,6 @@ const Renderer = (() => {
     scrollToLine,
     scrollToRatio,
     scrollNotebookToCell,
+    scrollToNotebookAnchor,
   };
 })();

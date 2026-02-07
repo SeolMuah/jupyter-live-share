@@ -50,10 +50,11 @@ interface DrawStroke {
   color: string;
   width: number;
   alpha: number;
-  points: Array<{ xRatio: number; yAbsolute: number }>;
+  points: Array<{ cellIndex: number; xRatio: number; yOffset: number }>;
 }
 
 let drawStrokes: DrawStroke[] = [];
+let lastScrollSync: unknown = null;
 const MAX_DRAW_STROKES = 500;
 const MAX_POINTS_PER_STROKE = 5000;
 
@@ -383,6 +384,8 @@ export function startWsServer(
         }
         if (msg.type === 'draw:stroking') {
           if (!meta.isTeacher) return;
+          const sd = msg.data as Record<string, unknown>;
+          if (!sd || !Array.isArray(sd.points) || sd.points.length > 200) return;
           broadcast('draw:stroking', msg.data);
           return;
         }
@@ -406,6 +409,22 @@ export function startWsServer(
           if (!meta.isTeacher) return;
           drawStrokes = [];
           broadcast('draw:clear', {});
+          return;
+        }
+
+        if (msg.type === 'scroll:sync') {
+          if (!meta.isTeacher) return;
+          const d = msg.data as Record<string, unknown>;
+          if (!d || typeof d !== 'object') return;
+          if (d.type === 'notebook') {
+            if (typeof d.cellIndex !== 'number' || typeof d.offsetRatio !== 'number') return;
+          } else if (d.type === 'plaintext') {
+            if (typeof d.scrollRatio !== 'number') return;
+          } else {
+            return;
+          }
+          lastScrollSync = msg.data;
+          broadcast('scroll:sync', msg.data);
           return;
         }
       } catch (err) {
@@ -436,6 +455,8 @@ export function startWsServer(
 
 export function getDrawStrokes(): DrawStroke[] { return [...drawStrokes]; }
 export function clearDrawStrokes(): void { drawStrokes = []; }
+export function getLastScrollSync(): unknown { return lastScrollSync; }
+export function clearLastScrollSync(): void { lastScrollSync = null; }
 
 let onNewViewer: ((ws: WebSocket) => void) | null = null;
 
@@ -470,6 +491,7 @@ export function stopWsServer(): Promise<void> {
     currentPoll = null;
     chatMessageId = 0;
     drawStrokes = [];
+    lastScrollSync = null;
 
     if (!wss) {
       resolve();
@@ -506,6 +528,7 @@ export function forceStopWsServer(): void {
   currentPoll = null;
   chatMessageId = 0;
   drawStrokes = [];
+  lastScrollSync = null;
 
   if (wss) {
     try {

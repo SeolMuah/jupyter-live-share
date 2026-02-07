@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes } from '../server/wsServer';
+import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
-import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns } from '../utils/imageResolver';
+import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
 const CELL_DEBOUNCE_MS = 50; // 빠른 글자 동기화 (150→50)
@@ -184,9 +184,10 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
   resolveNotebookImages(serialized, baseDir);
   broadcast('notebook:full', serialized);
 
-  // 파일 전환 시 판서 초기화
+  // 파일 전환 시 판서 및 스크롤 위치 초기화
   clearDrawStrokes();
   broadcast('draw:clear', {});
+  clearLastScrollSync();
 
   // Pre-optimize images in background using ORIGINAL text (not resolved data URIs)
   if (rawText) {
@@ -220,9 +221,10 @@ function switchToTextDocument(document: vscode.TextDocument) {
 
   broadcast('document:full', serialized);
 
-  // 파일 전환 시 판서 초기화
+  // 파일 전환 시 판서 및 스크롤 위치 초기화
   clearDrawStrokes();
   broadcast('draw:clear', {});
+  clearLastScrollSync();
 
   Logger.info(`Switched to text document: ${document.uri.path}`);
 }
@@ -307,10 +309,20 @@ function setupNewViewerHandler() {
     if (strokes.length > 0) {
       sendTo(ws, 'draw:full', { strokes });
     }
+
+    // 마지막 스크롤 위치가 있으면 새 접속자에게 전송
+    const scrollState = getLastScrollSync();
+    if (scrollState) {
+      sendTo(ws, 'scroll:sync', scrollState);
+    }
   });
 }
 
 export function startWatching() {
+  // Set workspace root as security boundary for image path resolution
+  const folders = vscode.workspace.workspaceFolders;
+  setProjectRoot(folders?.[0]?.uri.fsPath ?? null);
+
   // Register new viewer handler once (handles both notebook and plaintext modes)
   setupNewViewerHandler();
 
@@ -889,6 +901,7 @@ export function stopWatching() {
 
   lastSentSources.clear();
   clearImageCache();
+  setProjectRoot(null);
   currentNotebook = null;
   currentTextDocument = null;
   watchMode = null;
