@@ -706,6 +706,7 @@ footer {
   background: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
   font-size: 0.85rem;
+  z-index: 350; /* above draw canvas (301), below tools panel (400) */
 }
 
 footer button {

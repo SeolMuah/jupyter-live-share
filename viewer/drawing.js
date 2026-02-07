@@ -22,6 +22,7 @@ const Drawing = (() => {
 
   // rAF batching
   let rafId = null;
+  let lastDrawnIndex = 0; // incremental drawing: tracks how many points already rendered
 
   // Tool state
   let currentTool = 'pen'; // 'pen' | 'highlighter' | 'eraser'
@@ -314,6 +315,7 @@ const Drawing = (() => {
     currentPoints = [pt];
 
     // Draw initial dot on active canvas
+    lastDrawnIndex = 0;
     if (ctx) {
       ctx.globalAlpha = alpha;
       ctx.fillStyle = currentColor;
@@ -321,6 +323,7 @@ const Drawing = (() => {
       ctx.arc(pt._x, pt._y, width / 2, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
+      lastDrawnIndex = 1;
     }
 
     // Start batch timer for WS sending
@@ -401,13 +404,13 @@ const Drawing = (() => {
   function drawActiveStroke() {
     if (!currentStroke || !ctx) return;
     const pts = currentStroke.points;
-    if (pts.length < 1) return;
+    // Nothing new to draw
+    if (lastDrawnIndex >= pts.length || pts.length < 2) return;
 
-    const w = container.clientWidth;
-    const h = container.scrollHeight;
-
-    // Clear active canvas and redraw current stroke fully
-    ctx.clearRect(0, 0, w, h);
+    // Incremental: only draw NEW segments since last frame.
+    // Avoids clearRect on full-height canvas (scrollHeight can be 5000-10000+ px)
+    // which was the main performance bottleneck in Electron Webview.
+    const startIdx = Math.max(1, lastDrawnIndex);
 
     ctx.globalAlpha = currentStroke.alpha;
     ctx.strokeStyle = currentStroke.color;
@@ -415,21 +418,15 @@ const Drawing = (() => {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    if (pts.length === 1) {
-      ctx.fillStyle = currentStroke.color;
-      ctx.beginPath();
-      ctx.arc(pts[0]._x, pts[0]._y, currentStroke.width / 2, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(pts[0]._x, pts[0]._y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i]._x, pts[i]._y);
-      }
-      ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pts[startIdx - 1]._x, pts[startIdx - 1]._y);
+    for (let i = startIdx; i < pts.length; i++) {
+      ctx.lineTo(pts[i]._x, pts[i]._y);
     }
-
+    ctx.stroke();
     ctx.globalAlpha = 1;
+
+    lastDrawnIndex = pts.length;
   }
 
   function onPointerUp(e) {
