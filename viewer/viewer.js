@@ -152,20 +152,40 @@
       let scrollThrottleTimer = null;
       const SCROLL_THROTTLE_MS = 150;
 
-      window.addEventListener('scroll', () => {
+      let lastScrollEventTime = 0;
+      const onScroll = () => {
+        // window/document 이중 발화 방지 (같은 frame 내 중복 무시)
+        const now = performance.now();
+        if (now - lastScrollEventTime < 5) return;
+        lastScrollEventTime = now;
+
         if (scrollThrottleTimer) clearTimeout(scrollThrottleTimer);
         scrollThrottleTimer = setTimeout(() => {
           scrollThrottleTimer = null;
           const anchor = computeScrollAnchor();
           if (anchor) WsClient.send('scroll:sync', anchor);
         }, SCROLL_THROTTLE_MS);
-      }, { passive: true });
+      };
+
+      // VS Code Webview은 iframe 내부에서 렌더링되어
+      // window scroll 이벤트가 발생하지 않을 수 있음 → document에도 등록
+      window.addEventListener('scroll', onScroll, { passive: true });
+      document.addEventListener('scroll', onScroll, { passive: true });
     }
+  }
+
+  /**
+   * Get current scroll position (robust for VS Code Webview iframe)
+   */
+  function getScrollY() {
+    return window.scrollY || window.pageYOffset
+      || document.documentElement.scrollTop || document.body.scrollTop || 0;
   }
 
   function computeScrollAnchor() {
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-    const viewportTop = window.scrollY + headerHeight;
+    const scrollY = getScrollY();
+    const viewportTop = scrollY + headerHeight;
 
     if (documentType === 'notebook') {
       const cells = document.querySelectorAll('#notebook-cells .cell');
@@ -190,7 +210,7 @@
     // Plaintext: 비율 기반
     const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
     if (maxScroll <= 0) return null;
-    return { type: 'plaintext', scrollRatio: window.scrollY / maxScroll };
+    return { type: 'plaintext', scrollRatio: scrollY / maxScroll };
   }
 
   // === Name Flow ===

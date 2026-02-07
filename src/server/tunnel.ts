@@ -32,11 +32,53 @@ export class TunnelManager {
     return this.tunnelUrl;
   }
 
-  async start(port: number): Promise<string> {
-    const cloudflaredPath = await this.ensureBinary();
+  private static readonly MAX_RETRIES = 2;
+  private static readonly RETRY_DELAY_MS = 2000;
 
+  async start(port: number, onProgress?: (message: string) => void): Promise<string> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= TunnelManager.MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          const msg = `Tunnel retry (${attempt}/${TunnelManager.MAX_RETRIES})...`;
+          Logger.info(msg);
+          onProgress?.(msg);
+          this.stop();
+          await new Promise(r => setTimeout(r, TunnelManager.RETRY_DELAY_MS));
+        }
+
+        const url = await this.startOnce(port);
+
+        if (this.isValidTunnelUrl(url)) {
+          return url;
+        }
+
+        Logger.warn(`Invalid tunnel URL received: "${url}", retrying...`);
+        lastError = new Error(`Invalid tunnel URL: ${url}`);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        Logger.warn(`Tunnel attempt ${attempt + 1} failed: ${lastError.message}`);
+      }
+    }
+
+    this.stop();
+    throw lastError || new Error('Tunnel creation failed after retries');
+  }
+
+  private isValidTunnelUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' && parsed.hostname.endsWith('.trycloudflare.com');
+    } catch {
+      return false;
+    }
+  }
+
+  private async startOnce(port: number): Promise<string> {
+    const cloudflaredPath = await this.ensureBinary();
     return new Promise((resolve, reject) => {
-      let settled = false; // Prevent double resolve/reject
+      let settled = false;
 
       // Event handlers (stored for cleanup)
       let stderrHandler: ((data: Buffer) => void) | null = null;
@@ -99,7 +141,6 @@ export class TunnelManager {
           Logger.error(`cloudflared exited with code ${code}`);
           settle(false, new Error(`cloudflared exited with code ${code}`));
         } else if (!this.tunnelUrl) {
-          // Process exited cleanly but URL was never captured
           Logger.error('cloudflared exited without providing tunnel URL');
           settle(false, new Error('cloudflared exited without providing tunnel URL'));
         }

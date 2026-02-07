@@ -680,8 +680,12 @@ const Renderer = (() => {
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
     const targetScroll = cellEl.offsetTop + (cellEl.offsetHeight * offsetRatio) - headerHeight;
 
+    // 현재 스크롤 위치 (VS Code Webview iframe 호환)
+    const currentScroll = window.scrollY || window.pageYOffset
+      || document.documentElement.scrollTop || document.body.scrollTop || 0;
+
     // 이미 5px 이내면 스크롤 생략 (jitter 방지)
-    if (Math.abs(window.scrollY - targetScroll) < 5) return;
+    if (Math.abs(currentScroll - targetScroll) < 5) return;
 
     window.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' });
   }

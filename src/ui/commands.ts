@@ -77,20 +77,7 @@ export async function startSession(
         // 4. 터널 시작 (설정에 따라)
         let tunnelUrl = `http://localhost:${config.port}`;
 
-        if (config.tunnelProvider === 'cloudflare') {
-          progress.report({ message: 'Creating tunnel (this may take a few seconds)...' });
-          tunnel = new TunnelManager(context.extensionPath);
-          try {
-            tunnelUrl = await tunnel.start(config.port);
-          } catch (err) {
-            Logger.warn(`Tunnel failed, using localhost: ${err}`);
-            vscode.window.showWarningMessage(
-              `Tunnel creation failed. Using local URL: http://localhost:${config.port}`
-            );
-          }
-        }
-
-        // 5. UI 업데이트
+        // 4-1. 터널 상태를 사이드바에 표시하기 위해 먼저 세션 UI 시작
         isRunning = true;
         let fileName: string;
         if (isNotebook) {
@@ -101,6 +88,38 @@ export async function startSession(
           fileName = '(대기 중)';
         }
 
+        let tunnelStatus: string | undefined;
+
+        if (config.tunnelProvider === 'cloudflare') {
+          // 사이드바를 먼저 표시 (터널 연결 중 상태)
+          sidebarView?.updateState({
+            isRunning: true,
+            url: `http://localhost:${config.port}`,
+            port: config.port,
+            pin: pin || undefined,
+            viewerCount: 0,
+            fileName,
+            tunnelStatus: 'Tunnel connecting...',
+          });
+
+          progress.report({ message: 'Creating tunnel (this may take a few seconds)...' });
+          tunnel = new TunnelManager(context.extensionPath);
+          try {
+            tunnelUrl = await tunnel.start(config.port, (msg) => {
+              progress.report({ message: msg });
+              sidebarView?.updateState({ tunnelStatus: msg });
+            });
+            tunnelStatus = undefined; // 성공 시 상태 메시지 제거
+          } catch (err) {
+            Logger.warn(`Tunnel failed, using localhost: ${err}`);
+            tunnelStatus = 'Tunnel failed — using localhost';
+            vscode.window.showWarningMessage(
+              `Tunnel creation failed (retries exhausted). Using local URL: http://localhost:${config.port}`
+            );
+          }
+        }
+
+        // 5. UI 업데이트 (최종 URL 반영)
         statusBar.show(0, tunnelUrl);
         sidebarView?.updateState({
           isRunning: true,
@@ -109,6 +128,7 @@ export async function startSession(
           pin: pin || undefined,
           viewerCount: 0,
           fileName,
+          tunnelStatus,
         });
 
         // URL 클립보드 복사
@@ -248,6 +268,7 @@ async function cleanupSession(
     isRunning: false,
     url: undefined,
     port: undefined,
+    tunnelStatus: undefined,
     pin: undefined,
     viewerCount: 0,
     fileName: undefined,

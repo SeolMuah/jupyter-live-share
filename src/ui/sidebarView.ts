@@ -8,6 +8,7 @@ interface SessionState {
   viewerCount: number;
   fileName?: string;
   pollActive?: boolean;
+  tunnelStatus?: string;
 }
 
 export class SessionViewProvider implements vscode.WebviewViewProvider {
@@ -172,6 +173,22 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
     }
     .info-value.clickable:hover {
       text-decoration: underline;
+    }
+
+    /* Tunnel status */
+    .tunnel-status .info-value {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    .tunnel-status.warning .info-value {
+      color: var(--vscode-editorWarning-foreground, #cca700);
+    }
+    .tunnel-status.error .info-value {
+      color: var(--vscode-errorForeground, #f48771);
+    }
+    .tunnel-status.info .info-value {
+      color: var(--vscode-descriptionForeground);
     }
 
     /* Buttons */
@@ -524,6 +541,9 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         <span class="info-label">URL</span>
         <span class="info-value clickable" id="infoUrl" title="Click to copy"></span>
       </div>
+      <div class="info-row tunnel-status" id="tunnelStatusRow" style="display:none;">
+        <span class="info-value" id="tunnelStatus" style="width:100%;text-align:left;margin-left:0;"></span>
+      </div>
       <div class="info-row">
         <span class="info-label">File</span>
         <span class="info-value" id="infoFile">-</span>
@@ -619,6 +639,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       const copiedToast = document.getElementById('copiedToast');
       const teacherNameInput = document.getElementById('teacherName');
       const shareImagesCheckbox = document.getElementById('shareImages');
+      const tunnelStatusRow = document.getElementById('tunnelStatusRow');
+      const tunnelStatusEl = document.getElementById('tunnelStatus');
 
       let ws = null;
       let currentState = { isRunning: false, viewerCount: 0 };
@@ -1018,6 +1040,18 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
             infoUrl.title = state.url ? 'Click to copy: ' + state.url : '';
             infoFile.textContent = state.fileName || '-';
             infoViewers.textContent = String(state.viewerCount || 0);
+
+            // Tunnel status display
+            if (state.tunnelStatus) {
+              tunnelStatusRow.style.display = '';
+              tunnelStatusEl.textContent = state.tunnelStatus;
+              // Classify: retry → warning, failed → error, else info
+              tunnelStatusRow.className = 'info-row tunnel-status ' +
+                (state.tunnelStatus.includes('failed') || state.tunnelStatus.includes('실패') ? 'error' :
+                 state.tunnelStatus.includes('retry') || state.tunnelStatus.includes('재시도') ? 'warning' : 'info');
+            } else {
+              tunnelStatusRow.style.display = 'none';
+            }
 
             // Connect WebSocket if port available and not already connected
             if (state.port && (!ws || ws.readyState === WebSocket.CLOSED)) {
