@@ -29,6 +29,7 @@
   --header-height: 40px;
   --chat-header-bg: #f0f3f6;
   --chat-header-text: #24292f;
+  --chat-tab-width: 32px;
 }
 
 /* === Dark Mode === */
@@ -199,6 +200,7 @@ header {
 #app-layout {
   display: flex;
   min-height: calc(100vh - var(--header-height) - var(--footer-height));
+  margin-right: var(--chat-tab-width);
   transition: margin-right 0.25s ease-out;
 }
 #app-layout.chat-open {
@@ -821,9 +823,60 @@ footer label {
 }
 
 .chat-panel.collapsed {
-  width: 0;
+  width: var(--chat-tab-width);
   border-left-color: transparent;
   box-shadow: none;
+  cursor: pointer;
+}
+
+/* === Chat Edge Tab (visible when collapsed) === */
+.chat-edge-tab {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: var(--chat-tab-width);
+  height: 100%;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+}
+
+.chat-panel.collapsed .chat-edge-tab {
+  display: flex;
+}
+
+.chat-edge-tab:hover {
+  background: var(--bg-secondary);
+  color: var(--accent);
+}
+
+.chat-edge-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.chat-edge-badge {
+  position: absolute;
+  top: 12px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 8px;
+  background: #cf222e;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chat-header {
@@ -896,52 +949,6 @@ footer label {
   color: var(--text-primary);
 }
 
-/* === Chat Floating Toggle (visible when chat is collapsed) === */
-.chat-float-toggle {
-  position: fixed;
-  right: 16px;
-  bottom: calc(var(--footer-height) + 16px);
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
-  z-index: 201;
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.chat-float-toggle:hover {
-  transform: scale(1.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.chat-float-toggle.visible {
-  display: flex;
-}
-
-.chat-float-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  border-radius: 9px;
-  background: #cf222e;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
 
 /* === Chat Empty State === */
 .chat-empty-state {
@@ -1345,10 +1352,15 @@ footer label {
 @media (max-width: 768px) {
   #app-layout {
     display: block;
+    margin-right: 0;
   }
 
   #app-layout.chat-open {
     margin-right: 0;
+  }
+
+  .chat-edge-tab {
+    display: none !important;
   }
 
   #notebook-container {
@@ -1370,7 +1382,7 @@ footer label {
   }
 
   .chat-panel.collapsed {
-    width: 100%; /* override desktop width:0 */
+    width: 100%; /* override desktop tab width */
     right: -100%;
     border-left-color: var(--border-color);
   }
@@ -1391,10 +1403,6 @@ footer label {
   .chat-messages,
   .chat-input-area {
     min-width: 0; /* override desktop min-width for narrow mobile screens */
-  }
-
-  .chat-float-toggle {
-    display: none !important;
   }
 
   .exec-label {
@@ -1558,9 +1566,6 @@ footer label {
 /* Pencil cursor for drawing mode */
 #draw-canvas.cursor-pen {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3Cpath d='m15 5 4 4'/%3E%3C/svg%3E") 2 22, crosshair;
-}
-#draw-canvas.cursor-highlighter {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Crect x='6' y='1' width='12' height='22' rx='3' fill='%23fbbf24' fill-opacity='0.6' stroke='%23d97706' stroke-width='1.5'/%3E%3Crect x='8' y='18' width='8' height='3' rx='1' fill='%23d97706'/%3E%3C/svg%3E") 12 22, crosshair;
 }
 #draw-canvas.cursor-eraser {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Crect x='2' y='2' width='16' height='16' rx='3' fill='white' stroke='%23999' stroke-width='1.5'/%3E%3C/svg%3E") 10 10, pointer;

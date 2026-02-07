@@ -46,6 +46,10 @@ const Drawing = (() => {
   let cachedContainerTop = 0;
   let cachedCW = 0;
 
+  // Viewport canvas scroll tracking
+  let cachedScrollOffset = 0;
+  let scrollRAFPending = false;
+
   // Cell position cache — built once per resize/stroke-start
   let cellPosCache = null;
 
@@ -72,6 +76,27 @@ const Drawing = (() => {
 
   function getCellPositions() {
     return cellPosCache || buildCellCache();
+  }
+
+  // --- Viewport Canvas Helpers ---
+
+  // Container's scroll offset (window scroll based — #notebook-container has no overflow-y)
+  function getScrollOffset() {
+    return Math.max(0, -container.getBoundingClientRect().top);
+  }
+
+  // Clear viewport-sized canvas safely (reset transform before clearing)
+  function clearCanvas(context, canvasEl) {
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    context.restore();
+  }
+
+  // Apply DPR + scroll offset transform (absolute coords → viewport coords)
+  function applyScrollTransform(context) {
+    const dpr = isTeacher ? 1 : (window.devicePixelRatio || 1);
+    context.setTransform(dpr, 0, 0, dpr, 0, -cachedScrollOffset * dpr);
   }
 
   // --- Coordinate Conversion ---
@@ -228,6 +253,10 @@ const Drawing = (() => {
     });
     resizeObserver.observe(container);
 
+    // Scroll listeners for viewport canvas repositioning
+    window.addEventListener('scroll', onContainerScroll, { passive: true });
+    container.addEventListener('scroll', onContainerScroll, { passive: true });
+
     // Toolbar setup — tools panel on right side, toggle in footer
     toolsPanel = document.getElementById('draw-tools-panel');
 
@@ -243,26 +272,92 @@ const Drawing = (() => {
   function resizeCanvas() {
     if (!canvas || !staticCanvas || !container) return;
     if (!staticCtx || !ctx) return;
-    // Teacher preview: DPR 1 to reduce GPU memory (~122MB → ~30MB)
     const dpr = isTeacher ? 1 : (window.devicePixelRatio || 1);
     const w = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-    const h = container.scrollHeight;
+    const h = window.innerHeight; // viewport height instead of scrollHeight
     const leftOffset = cellsDiv ? cellsDiv.offsetLeft : 0;
+    cachedScrollOffset = getScrollOffset();
 
-    // Resize both canvases — aligned to cellsDiv (centered content area)
-    staticCanvas.style.left = leftOffset + 'px';
-    staticCanvas.style.width = w + 'px';
-    staticCanvas.style.height = h + 'px';
-    staticCanvas.width = w * dpr;
-    staticCanvas.height = h * dpr;
-    staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Both canvases: viewport-sized, positioned at scroll offset
+    for (const cvs of [staticCanvas, canvas]) {
+      cvs.style.left = leftOffset + 'px';
+      cvs.style.top = cachedScrollOffset + 'px';
+      cvs.style.width = w + 'px';
+      cvs.style.height = h + 'px';
+      cvs.width = w * dpr;
+      cvs.height = h * dpr;
+    }
+    applyScrollTransform(staticCtx);
+    applyScrollTransform(ctx);
+  }
 
-    canvas.style.left = leftOffset + 'px';
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // --- Scroll Handling ---
+
+  function onContainerScroll() {
+    if (scrollRAFPending) return;
+    scrollRAFPending = true;
+    requestAnimationFrame(() => {
+      scrollRAFPending = false;
+      repositionCanvases();
+    });
+  }
+
+  function repositionCanvases() {
+    if (!canvas || !staticCanvas || !container) return;
+    const scrollOffset = getScrollOffset();
+    if (Math.abs(scrollOffset - cachedScrollOffset) < 1) return;
+    cachedScrollOffset = scrollOffset;
+
+    // 1. Update CSS position
+    staticCanvas.style.top = scrollOffset + 'px';
+    canvas.style.top = scrollOffset + 'px';
+
+    // 2. Redraw static canvas
+    clearCanvas(staticCtx, staticCanvas);
+    applyScrollTransform(staticCtx);
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
+    const positions = getCellPositions();
+    for (const stroke of strokes) {
+      drawSmoothStroke(staticCtx, stroke, cw, positions);
+    }
+
+    // 3. Redraw active canvas if needed
+    clearCanvas(ctx, canvas);
+    applyScrollTransform(ctx);
+    if (currentStroke && currentStroke.points.length > 0) {
+      lastDrawnIndex = 0;
+      redrawActiveStrokeFull();
+    } else if (intermediateStrokes.size > 0) {
+      redrawIntermediateCanvasInner(cw, positions);
+    }
+  }
+
+  // Full redraw of active stroke (used during scroll — incremental is invalidated)
+  function redrawActiveStrokeFull() {
+    if (!currentStroke || !ctx) return;
+    const pts = currentStroke.points;
+    if (pts.length === 0) return;
+
+    ctx.globalAlpha = currentStroke.alpha;
+    if (pts.length === 1) {
+      ctx.fillStyle = currentStroke.color;
+      ctx.beginPath();
+      ctx.arc(pts[0]._x, pts[0]._y, currentStroke.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = currentStroke.color;
+      ctx.lineWidth = currentStroke.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[0]._x, pts[0]._y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i]._x, pts[i]._y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    lastDrawnIndex = pts.length;
   }
 
   // --- Toolbar ---
@@ -280,7 +375,7 @@ const Drawing = (() => {
           updateCanvasCursor();
         } else {
           canvas.style.touchAction = '';
-          canvas.classList.remove('cursor-pen', 'cursor-highlighter', 'cursor-eraser');
+          canvas.classList.remove('cursor-pen', 'cursor-eraser');
           canvas.style.cursor = '';
         }
       });
@@ -302,6 +397,7 @@ const Drawing = (() => {
         toolsPanel.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentColor = btn.dataset.color;
+        updateCanvasCursor();
       });
     });
 
@@ -343,14 +439,19 @@ const Drawing = (() => {
     canvas.addEventListener('pointerleave', onPointerUp);
   }
 
+  function buildHighlighterCursorSVG(color) {
+    const enc = color.replace('#', '%23');
+    return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Ccircle cx='14' cy='14' r='12' fill='${enc}' fill-opacity='0.35' stroke='${enc}' stroke-width='1.5'/%3E%3C/svg%3E") 14 14, crosshair`;
+  }
+
   function updateCanvasCursor() {
     if (!canvas) return;
     canvas.style.cursor = '';
-    canvas.classList.remove('cursor-pen', 'cursor-highlighter', 'cursor-eraser');
+    canvas.classList.remove('cursor-pen', 'cursor-eraser');
     if (currentTool === 'eraser') {
       canvas.classList.add('cursor-eraser');
     } else if (currentTool === 'highlighter') {
-      canvas.classList.add('cursor-highlighter');
+      canvas.style.cursor = buildHighlighterCursorSVG(currentColor);
     } else {
       canvas.classList.add('cursor-pen');
     }
@@ -534,10 +635,14 @@ const Drawing = (() => {
     invalidateCellCache();
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
+    applyScrollTransform(staticCtx);
     drawSmoothStroke(staticCtx, currentStroke, cw, positions);
 
     // Clear active canvas
-    if (ctx) ctx.clearRect(0, 0, cw, container.scrollHeight);
+    if (ctx) {
+      clearCanvas(ctx, canvas);
+      applyScrollTransform(ctx);
+    }
 
     WsClient.send('draw:stroke', {
       strokeId: currentStroke.strokeId,
@@ -634,11 +739,22 @@ const Drawing = (() => {
   function redrawAll(skipCacheInvalidation) {
     if (!staticCtx || !staticCanvas || !container) return;
     if (!skipCacheInvalidation) invalidateCellCache();
+    cachedScrollOffset = getScrollOffset();
+
+    // Update canvas positions
+    staticCanvas.style.top = cachedScrollOffset + 'px';
+    canvas.style.top = cachedScrollOffset + 'px';
+
+    // Clear and re-apply transform
+    clearCanvas(staticCtx, staticCanvas);
+    applyScrollTransform(staticCtx);
+    if (ctx) {
+      clearCanvas(ctx, canvas);
+      applyScrollTransform(ctx);
+    }
+
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
-    // Clear both canvases
-    staticCtx.clearRect(0, 0, cw, container.scrollHeight);
-    if (ctx) ctx.clearRect(0, 0, cw, container.scrollHeight);
     for (const stroke of strokes) {
       drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
@@ -653,6 +769,7 @@ const Drawing = (() => {
     if (!cellPosCache) buildCellCache();
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
+    applyScrollTransform(staticCtx);
     drawSmoothStroke(staticCtx, stroke, cw, positions);
     // Redraw active canvas with remaining intermediates only
     redrawIntermediateCanvas();
@@ -689,13 +806,17 @@ const Drawing = (() => {
 
   function redrawIntermediateCanvas() {
     if (!ctx || !container) return;
-    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-    ctx.clearRect(0, 0, cw, container.scrollHeight);
+    clearCanvas(ctx, canvas);
+    applyScrollTransform(ctx);
     if (intermediateStrokes.size === 0) return;
 
     if (!cellPosCache) buildCellCache();
+    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
+    redrawIntermediateCanvasInner(cw, positions);
+  }
 
+  function redrawIntermediateCanvasInner(cw, positions) {
     intermediateStrokes.forEach((entry) => {
       const pts = entry.points;
       if (pts.length === 0) return;
@@ -761,12 +882,13 @@ const Drawing = (() => {
     strokes = [];
     intermediateStrokes.clear();
     invalidateCellCache();
-    const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     if (staticCtx && staticCanvas && container) {
-      staticCtx.clearRect(0, 0, cw, container.scrollHeight);
+      clearCanvas(staticCtx, staticCanvas);
+      applyScrollTransform(staticCtx);
     }
     if (ctx && canvas && container) {
-      ctx.clearRect(0, 0, cw, container.scrollHeight);
+      clearCanvas(ctx, canvas);
+      applyScrollTransform(ctx);
     }
   }
 
@@ -775,6 +897,11 @@ const Drawing = (() => {
     if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
     if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
     if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+    scrollRAFPending = false;
+
+    // Remove scroll listeners
+    window.removeEventListener('scroll', onContainerScroll);
+    if (container) container.removeEventListener('scroll', onContainerScroll);
 
     // Clear state
     strokes = [];
@@ -787,6 +914,7 @@ const Drawing = (() => {
     cachedCellsRect = null;
     cachedContainerTop = 0;
     cachedCW = 0;
+    cachedScrollOffset = 0;
 
     // Reset drawing mode
     drawingMode = false;
