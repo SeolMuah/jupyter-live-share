@@ -710,7 +710,6 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       btnPollStart.addEventListener('click', () => {
         const question = pollQuestion.value.trim();
-        if (!question) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) {
           addSystemMessage('WebSocket not connected. Cannot create poll.');
           return;

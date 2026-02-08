@@ -331,7 +331,6 @@ export function startWsServer(
           if (!meta.isTeacher) return; // Only teacher
           const pollData = msg.data as { question: string; optionCount: number; pollId: string; options?: string[] };
           const question = (pollData.question || '').trim();
-          if (!question) return; // Reject empty question
           const optionCount = Math.min(Math.max(pollData.optionCount || 2, 2), 10);
           const pollId = pollData.pollId || Date.now().toString();
           // Sanitize options

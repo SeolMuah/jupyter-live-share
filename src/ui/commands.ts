@@ -160,10 +160,10 @@ export async function createPoll(sidebarView?: SessionViewProvider) {
   const config = getConfig();
 
   const question = await vscode.window.showInputBox({
-    prompt: 'Enter poll question',
+    prompt: 'Enter poll question (optional)',
     placeHolder: 'e.g. How well do you understand?',
   });
-  if (!question) return;
+  if (question === undefined) return; // Escape 취소만 중단, 빈 문자열은 허용
 
   const optionCountStr = await vscode.window.showQuickPick(
     ['2', '3', '4', '5'],

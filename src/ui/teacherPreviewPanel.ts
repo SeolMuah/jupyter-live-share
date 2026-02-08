@@ -189,10 +189,10 @@ export class TeacherPreviewPanel {
       <div id="poll-number-mode">
         <label for="poll-option-count">Number of options (2~5):</label>
         <select id="poll-option-count">
-          <option value="2">2</option>
+          <option value="2" selected>2</option>
           <option value="3">3</option>
           <option value="4">4</option>
-          <option value="5" selected>5</option>
+          <option value="5">5</option>
         </select>
       </div>
       <div id="poll-text-mode" style="display:none;">

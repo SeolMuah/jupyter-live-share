@@ -756,6 +756,11 @@
     // Check localStorage for previous vote on this poll
     const savedVote = localStorage.getItem('jls-poll-' + data.pollId);
 
+    // Show End Poll button for teacher (toolbar에 표시, VS Code webview 포함)
+    if (isTeacher && btnEndPoll) {
+      btnEndPoll.style.display = '';
+    }
+
     // VS Code mode: poll handled by separate Viewer Chat panel, only track state
     if (isVSCodeWebview) return;
 
@@ -806,11 +811,6 @@
     // Auto-scroll and open chat panel
     chatMessages.scrollTop = chatMessages.scrollHeight;
     toggleChat(true);
-
-    // Show End Poll button for teacher
-    if (isTeacher && btnEndPoll) {
-      btnEndPoll.style.display = '';
-    }
   }
 
   function votePoll(pollId, option) {
@@ -851,6 +851,10 @@
     // Find the poll card (use saved pollId from data, or find the latest card)
     const cardId = data.pollId || currentPollId;
     currentPollId = null;
+
+    // Hide End Poll button (toolbar, VS Code webview 포함)
+    if (btnEndPoll) btnEndPoll.style.display = 'none';
+
     if (isVSCodeWebview) return;
 
     const card = cardId ? document.getElementById('poll-card-' + cardId) : null;
@@ -867,9 +871,6 @@
       const buttons = card.querySelectorAll('.chat-poll-buttons button');
       buttons.forEach(btn => { btn.disabled = true; });
     }
-
-    // Hide End Poll button
-    if (btnEndPoll) btnEndPoll.style.display = 'none';
   }
 
   function renderPollBars(container, votes, totalVoters, options) {
@@ -908,7 +909,7 @@
   function showNewPollModal() {
     if (!isTeacher) return;
     pollQuestionInput.value = '';
-    pollOptionCount.value = '5';
+    pollOptionCount.value = '2';
     if (pollModeSelect) pollModeSelect.value = 'number';
     if (pollNumberMode) pollNumberMode.style.display = '';
     if (pollTextMode) pollTextMode.style.display = 'none';
@@ -919,10 +920,6 @@
 
   function submitNewPoll() {
     const question = pollQuestionInput.value.trim();
-    if (!question) {
-      pollQuestionInput.focus();
-      return;
-    }
     const pollId = Date.now().toString();
     let pollData;
 
@@ -934,7 +931,7 @@
       }
       pollData = { question, optionCount: lines.length, options: lines, pollId };
     } else {
-      const optionCount = parseInt(pollOptionCount.value) || 5;
+      const optionCount = parseInt(pollOptionCount.value) || 2;
       pollData = { question, optionCount, pollId };
     }
 

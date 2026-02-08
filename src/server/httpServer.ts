@@ -134,16 +134,13 @@ export function startHttpServer(port: number): Promise<http.Server> {
     // Poll API (VS Code에서 사용)
     app.post('/api/poll/start', requireLocalhost, (req, res) => {
       const { question, optionCount, options } = req.body;
-      if (!question || typeof question !== 'string') {
-        res.status(400).json({ error: 'question is required' });
-        return;
-      }
+      const q = typeof question === 'string' ? question.trim() : '';
       const count = Math.min(Math.max(Number(optionCount) || 2, 2), 10);
       const pollId = Date.now().toString();
       const sanitizedOptions = Array.isArray(options)
         ? options.map((o: unknown) => String(o || '').trim().slice(0, 100))
         : undefined;
-      startPoll(question.trim(), count, pollId, sanitizedOptions);
+      startPoll(q, count, pollId, sanitizedOptions);
       res.json({ success: true, pollId });
     });
 
