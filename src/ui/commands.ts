@@ -120,7 +120,7 @@ export async function startSession(
         });
 
         // Teacher Preview 패널이 열려있으면 새 세션으로 즉시 갱신
-        TeacherPreviewPanel.reload();
+        TeacherPreviewPanel.reload(context);
 
         // URL 클립보드 복사
         await vscode.env.clipboard.writeText(tunnelUrl);

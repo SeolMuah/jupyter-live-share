@@ -101,7 +101,7 @@ const Drawing = (() => {
 
   // --- Coordinate Conversion ---
   // Cell-relative coordinate system:
-  //   { cellIndex, xRatio, yOffset } for WS transmission
+  //   { cellIndex, xRatio, yRatio } for WS transmission
   //   + _x, _y (absolute pixel coords) cached for fast local drawing
 
   // Find cell index from absolute Y using binary search (O(log n))
@@ -131,9 +131,11 @@ const Drawing = (() => {
     const positions = getCellPositions();
     if (positions.length > 0) {
       const ci = findCellIndex(absY, positions);
-      return { cellIndex: ci, xRatio, yOffset: absY - positions[ci].top, _x: x, _y: absY };
+      const yOff = absY - positions[ci].top;
+      const ch = positions[ci].height || 1;
+      return { cellIndex: ci, xRatio, yRatio: yOff / ch, _x: x, _y: absY };
     }
-    return { cellIndex: -1, xRatio, yOffset: absY, _x: x, _y: absY };
+    return { cellIndex: -1, xRatio, yRatio: absY / (container.scrollHeight || 1), _x: x, _y: absY };
   }
 
   // Convert cell-relative point → absolute pixel (for received/stored strokes)
@@ -141,9 +143,9 @@ const Drawing = (() => {
     const x = pt.xRatio * cw;
     let y;
     if (pt.cellIndex >= 0 && positions && pt.cellIndex < positions.length) {
-      y = positions[pt.cellIndex].top + pt.yOffset;
+      y = positions[pt.cellIndex].top + pt.yRatio * (positions[pt.cellIndex].height || 1);
     } else {
-      y = pt.yOffset;
+      y = pt.yRatio * (container.scrollHeight || 1);
     }
     return { x, y };
   }
@@ -155,40 +157,34 @@ const Drawing = (() => {
     const out = new Array(points.length);
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
-      out[i] = { cellIndex: p.cellIndex, xRatio: p.xRatio, yOffset: p.yOffset };
+      out[i] = { cellIndex: p.cellIndex, xRatio: p.xRatio, yRatio: p.yRatio };
     }
     return out;
   }
 
   // Ramer-Douglas-Peucker point simplification (reduces WS payload 50-70%)
-  // Normalizes yOffset to xRatio scale using container width for uniform distance
+  // Both xRatio and yRatio are already in 0-1 normalized range
   function simplifyPoints(points, epsilon) {
     if (points.length <= 2) return points;
     if (epsilon === undefined) epsilon = 0.002;
 
-    // Normalize yOffset → same scale as xRatio (0-1 range relative to container width)
-    const cw = (cellsDiv ? cellsDiv.clientWidth : (container ? container.clientWidth : 960)) || 960;
-
     let maxDist = 0, maxIdx = 0;
     const first = points[0], last = points[points.length - 1];
-    const firstYNorm = first.yOffset / cw;
-    const lastYNorm = last.yOffset / cw;
     const dx = last.xRatio - first.xRatio;
-    const dy = lastYNorm - firstYNorm;
+    const dy = last.yRatio - first.yRatio;
     const lenSq = dx * dx + dy * dy;
 
     for (let i = 1; i < points.length - 1; i++) {
-      const ptYNorm = points[i].yOffset / cw;
       let dist;
       if (lenSq === 0) {
         const ex = points[i].xRatio - first.xRatio;
-        const ey = ptYNorm - firstYNorm;
+        const ey = points[i].yRatio - first.yRatio;
         dist = Math.sqrt(ex * ex + ey * ey);
       } else {
         const t = Math.max(0, Math.min(1,
-          ((points[i].xRatio - first.xRatio) * dx + (ptYNorm - firstYNorm) * dy) / lenSq));
+          ((points[i].xRatio - first.xRatio) * dx + (points[i].yRatio - first.yRatio) * dy) / lenSq));
         const px = first.xRatio + t * dx - points[i].xRatio;
-        const py = firstYNorm + t * dy - ptYNorm;
+        const py = first.yRatio + t * dy - points[i].yRatio;
         dist = Math.sqrt(px * px + py * py);
       }
       if (dist > maxDist) { maxDist = dist; maxIdx = i; }
@@ -559,13 +555,15 @@ const Drawing = (() => {
 
       // Find cell using binary search on cached positions
       let cellIndex = -1;
-      let yOffset = absY;
+      let yRatio = absY / (container.scrollHeight || 1);
       if (positions.length > 0) {
         cellIndex = findCellIndex(absY, positions);
-        yOffset = absY - positions[cellIndex].top;
+        const yOff = absY - positions[cellIndex].top;
+        const ch = positions[cellIndex].height || 1;
+        yRatio = yOff / ch;
       }
 
-      const pt = { cellIndex, xRatio, yOffset, _x: x, _y: absY };
+      const pt = { cellIndex, xRatio, yRatio, _x: x, _y: absY };
       currentStroke.points.push(pt);
       currentPoints.push(pt);
     }
@@ -662,9 +660,9 @@ const Drawing = (() => {
   function eraseAtPoint(pt) {
     const threshold = 15;
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-    const px = pt._x !== undefined ? pt._x : pt.xRatio * cw;
-    const py = pt._y !== undefined ? pt._y : pt.yOffset;
     const positions = getCellPositions();
+    const px = pt._x !== undefined ? pt._x : pt.xRatio * cw;
+    const py = pt._y !== undefined ? pt._y : ptToPixelXY(pt, cw, positions).y;
 
     let erased = false;
     for (let i = strokes.length - 1; i >= 0; i--) {

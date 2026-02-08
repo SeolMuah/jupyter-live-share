@@ -22,17 +22,17 @@ export class TeacherPreviewPanel {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
-  public static createOrShow(context: vscode.ExtensionContext) {
+  public static createOrShow(context: vscode.ExtensionContext, viewColumn?: vscode.ViewColumn, preserveFocus = false) {
     // Reuse existing panel
     if (TeacherPreviewPanel.currentPanel) {
-      TeacherPreviewPanel.currentPanel.panel.reveal(vscode.ViewColumn.Beside);
+      TeacherPreviewPanel.currentPanel.panel.reveal(viewColumn || vscode.ViewColumn.Beside, preserveFocus);
       return;
     }
 
     const panel = vscode.window.createWebviewPanel(
       TeacherPreviewPanel.viewType,
       'Teacher Preview',
-      vscode.ViewColumn.Beside,
+      { viewColumn: viewColumn || vscode.ViewColumn.Beside, preserveFocus },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -47,16 +47,14 @@ export class TeacherPreviewPanel {
     Logger.info('Teacher preview panel opened');
   }
 
-  public static reload(): void {
+  public static reload(context: vscode.ExtensionContext): void {
     if (TeacherPreviewPanel.currentPanel) {
-      const port = getConfig().port;
-      const wsUrl = `ws://localhost:${port}`;
-      // Use postMessage to tell the webview to reconnect (preserves webview state
-      // instead of replacing entire HTML which is unreliable with retainContextWhenHidden)
-      TeacherPreviewPanel.currentPanel.panel.webview.postMessage({
-        type: 'sessionReady',
-        wsUrl,
-      });
+      // Dispose and recreate: the only reliable way to reset a webview
+      // with retainContextWhenHidden (postMessage and HTML replacement are unreliable)
+      const viewColumn = TeacherPreviewPanel.currentPanel.panel.viewColumn;
+      TeacherPreviewPanel.currentPanel.panel.dispose();
+      // dispose() sets currentPanel = undefined, so createOrShow creates fresh panel
+      TeacherPreviewPanel.createOrShow(context, viewColumn, true);
     }
   }
 

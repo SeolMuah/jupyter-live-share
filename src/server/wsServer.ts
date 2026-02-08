@@ -50,7 +50,7 @@ interface DrawStroke {
   color: string;
   width: number;
   alpha: number;
-  points: Array<{ cellIndex: number; xRatio: number; yOffset: number }>;
+  points: Array<{ cellIndex: number; xRatio: number; yRatio: number }>;
 }
 
 let drawStrokes: DrawStroke[] = [];
