@@ -213,15 +213,12 @@ const Drawing = (() => {
     cellsDiv = document.getElementById('notebook-cells');
     if (!container || !cellsDiv) return;
 
-    // VS Code webview panels (teacher preview AND student viewer) may be narrower
-    // than the browser's 960px content area. Different widths cause different text
-    // wrapping -> cell heights change -> drawing positions drift relative to content.
-    // Force min-width to match browser's max-width (960px + 32px padding = 992px).
-    const isVSCode = typeof window.__VSCODE_WEBVIEW__ !== 'undefined';
-    if (isVSCode) {
-      container.style.minWidth = '992px';
-      document.body.style.overflowX = 'auto';
-    }
+    // ALL viewers must render content at identical width to prevent drawing drift.
+    // #notebook-cells has max-width:960px, container has 16px padding each side = 992px.
+    // Force min-width so text wrapping and cell heights are identical everywhere.
+    // Narrow viewports get horizontal scroll instead of reflowing content.
+    container.style.minWidth = '992px';
+    document.body.style.overflowX = 'auto';
 
     container.style.position = 'relative';
 
