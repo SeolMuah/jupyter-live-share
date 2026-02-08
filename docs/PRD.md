@@ -76,9 +76,11 @@
 │  ┌─────────────────┐    ┌──────────────────────────────────┐     │
 │  │   VS Code       │    │  Extension 내장 서버              │     │
 │  │  + Extension    │───▶│  ┌────────────┐ ┌─────────────┐  │     │
-│  │  (.ipynb 편집)  │    │  │ Express.js │ │ Socket.io   │  │     │
-│  └─────────────────┘    │  │ (HTTP)     │ │ (WebSocket) │  │     │
-│                          │  └────────────┘ └─────────────┘  │     │
+│  │  (.ipynb 편집)  │    │  │ Express.js │ │ ws          │  │     │
+│  │  + Teacher      │    │  │ (HTTP)     │ │ (WebSocket) │  │     │
+│  │    Preview 패널 │    │  │            │ │             │  │     │
+│  │  (판서 도구)    │    │  │            │ │             │  │     │
+│  └─────────────────┘    │  └────────────┘ └─────────────┘  │     │
 │                          └──────────┬───────────────────────┘     │
 │                                     │ localhost:3000              │
 │                          ┌──────────▼───────────┐                │
@@ -95,7 +97,7 @@
    - Read-Only 뷰어           - Read-Only 뷰어           - Read-Only 뷰어
    - 실시간 셀 업데이트       - 실시간 셀 업데이트       - 실시간 셀 업데이트
    - 출력 결과 렌더링         - 출력 결과 렌더링         - 출력 결과 렌더링
-   - 선생님 포커스 추적       - 선생님 포커스 추적       - 선생님 포커스 추적
+   - 선생님 커서/판서 표시    - 선생님 커서/판서 표시    - 선생님 커서/판서 표시
 ```
 
 ### 핵심 설계 원칙
@@ -138,8 +140,28 @@
 | 다크/라이트 모드 | 학생 뷰어 테마 선택 | P2 | 낮음 |
 | 코드 복사 버튼 | 학생이 셀 코드를 클립보드로 복사 | P2 | 낮음 |
 | QR 코드 표시 | URL을 QR 코드로 표시하여 공유 편의성 향상 | P2 | 낮음 |
-| 스크롤 자동 추적 | 선생님이 보는 셀로 학생 화면 자동 스크롤 | P2 | 중간 |
+| 스크롤 자동 추적 | 선생님이 보는 셀로 학생 화면 자동 스크롤 (Cell-relative Anchor 방식) | P2 | 중간 |
 | .ipynb 다운로드 | 학생이 현재 노트북 파일을 다운로드 | P2 | 낮음 |
+
+### Phase 4: 판서 및 인터랙션 (v2.1.0+)
+
+| 기능 | 설명 | 우선순위 | 구현 난이도 |
+|------|------|----------|-------------|
+| Teacher Preview 패널 | VS Code 내에서 학생 뷰를 미리보는 WebviewPanel | P1 | 중간 |
+| 실시간 판서 (Drawing) | Teacher Preview에서 펜/형광펜/지우개로 노트북 위에 판서, 학생에게 실시간 공유 | P1 | 높음 |
+| 판서 좌표 정규화 | xRatio/yRatio 기반 정규화로 화면 크기 무관하게 동일 위치에 판서 표시 | P0 | 중간 |
+| 로컬 이미지 공유 | 마크다운/HTML 내 로컬 이미지를 base64 data URI로 자동 변환 | P1 | 중간 |
+| 스크롤 동기화 | Cell-relative Anchor 방식으로 선생님 스크롤 위치를 학생에게 정확히 동기화 | P1 | 중간 |
+| 커서 위치 정확도 | DOM Range API 기반 커서 위치 계산으로 브라우저 간 일관성 확보 | P1 | 높음 |
+
+### Phase 5: 판서 성능 최적화 (v2.2.0+)
+
+| 기능 | 설명 | 우선순위 | 구현 난이도 |
+|------|------|----------|-------------|
+| 뷰포트 캔버스 아키텍처 | 3x 뷰포트 버퍼 캔버스로 판서 성능 및 메모리 최적화 | P0 | 높음 |
+| 뷰어 렌더링 통일 | 모든 뷰어에서 992px 고정 폭으로 동일 렌더링 보장 | P0 | 중간 |
+| DPR 캡 | devicePixelRatio를 max 2로 제한하여 고해상도 기기 메모리 절감 | P1 | 낮음 |
+| 오버레이 스크롤바 | 웹 브라우저 스크롤바가 레이아웃에 영향 주지 않도록 얇은 오버레이 적용 | P1 | 낮음 |
 
 ---
 
@@ -310,6 +332,41 @@ WebSocket broadcast (focus:cell)
 클라이언트에서 해당 셀 하이라이트 + 자동 스크롤
 ```
 
+### 7. 판서 (Drawing) 시
+
+```
+Teacher Preview에서 판서 도구 선택 (펜/형광펜/지우개)
+       ↓
+마우스/터치로 스트로크 그리기
+       ↓
+좌표를 xRatio/yRatio로 정규화 (셀 기준 상대 좌표)
+       ↓
+그리는 중: WebSocket broadcast (draw:stroking) — 실시간 중간 전송
+       ↓
+스트로크 완료: WebSocket broadcast (draw:stroke) — 최종 스트로크 전송
+       ↓
+클라이언트에서 캔버스 오버레이에 렌더링
+  - 2-canvas 아키텍처: staticCanvas (완료된 스트로크) + canvas (진행 중 스트로크)
+  - 3x 뷰포트 버퍼: canvasTop 기반 배치로 가시 영역 확장
+```
+
+### 8. 스크롤 동기화 시
+
+```
+선생님이 VS Code/Teacher Preview에서 스크롤
+       ↓
+throttle (150ms) 적용
+       ↓
+computeScrollAnchor()로 현재 뷰포트 상단 셀 + 비율 계산
+  - 노트북: { cellIndex, offsetRatio } (Cell-relative Anchor)
+  - 텍스트: { scrollRatio } (전체 비율)
+       ↓
+WebSocket broadcast (scroll:sync)
+       ↓
+학생 클라이언트에서 scrollToNotebookAnchor() / scrollToRatio()로 동기화
+  - 셀 높이가 달라도 비율(offsetRatio) 기반으로 정확한 위치 계산
+```
+
 ---
 
 ## API 설계
@@ -386,6 +443,75 @@ socket.emit('document:full', {
 socket.emit('document:update', {
   content: string            // 변경된 전체 내용
 });
+
+// 선생님 커서 위치 (노트북)
+socket.emit('cursor:position', {
+  cellIndex: number,
+  line: number,
+  character: number,
+  selectionStart?: { line: number, character: number },
+  selectionEnd?: { line: number, character: number },
+  hasSelection?: boolean
+});
+
+// 선생님 커서 위치 (텍스트 파일)
+socket.emit('cursor:position', {
+  mode: 'plaintext',
+  line: number,
+  character: number,
+  selectionStart?: { line: number, character: number },
+  selectionEnd?: { line: number, character: number },
+  hasSelection?: boolean
+});
+
+// 스크롤 동기화 (노트북 — Cell-relative Anchor)
+socket.emit('scroll:sync', {
+  type: 'notebook',
+  cellIndex: number,           // 뷰포트 상단에 보이는 셀 인덱스
+  offsetRatio: number          // 셀 내 비율 (0~1)
+});
+
+// 스크롤 동기화 (텍스트 파일)
+socket.emit('scroll:sync', {
+  type: 'plaintext',
+  scrollRatio: number          // 전체 문서 대비 비율 (0~1)
+});
+
+// 판서 스트로크 완료
+socket.emit('draw:stroke', {
+  strokeId: string,
+  cellIndex: number,
+  points: Array<{ xRatio: number, yRatio: number }>,
+  color: string,
+  width: number,
+  tool: 'pen' | 'highlighter'
+});
+
+// 판서 스트로크 진행 중 (실시간 중간 전송)
+socket.emit('draw:stroking', {
+  strokeId: string,
+  cellIndex: number,
+  points: Array<{ xRatio: number, yRatio: number }>,
+  color: string,
+  width: number,
+  tool: 'pen' | 'highlighter'
+});
+
+// 판서 전체 상태 (재접속 시)
+socket.emit('draw:full', {
+  strokes: DrawStroke[]
+});
+
+// 판서 실행 취소
+socket.emit('draw:undo', {});
+
+// 판서 지우개
+socket.emit('draw:erase', {
+  strokeId: string
+});
+
+// 판서 전체 지우기
+socket.emit('draw:clear', {});
 ```
 
 #### Client → Server

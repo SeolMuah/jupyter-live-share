@@ -13,6 +13,10 @@
 - **선생님 메시지 강조**: 선생님 채팅 메시지는 초록색 배경으로 구분 표시 (사이드바, Viewer Chat, 브라우저 모두 적용)
 - **실시간 설문조사 (Poll)**: 숫자 모드(1, 2, 3...) 및 텍스트 모드(사용자 정의 선택지) 지원, 실시간 막대 그래프 결과 표시 (1인 1표, 재투표 불가)
 - **선생님 이름 설정**: 세션 시작 전 사이드바에서 표시 이름 변경 가능 (기본값: "Teacher")
+- **실시간 판서 (Drawing/Annotation)**: Teacher Preview 패널에서 펜/형광펜/지우개로 노트북 위에 판서, 학생 화면에 실시간 공유
+- **Teacher Preview 패널**: VS Code 내에서 학생이 보는 화면을 미리보기 (판서 도구 포함)
+- **스크롤 동기화**: 선생님의 스크롤 위치를 Cell-relative Anchor 방식으로 학생 화면에 정확히 동기화
+- **로컬 이미지 공유**: 마크다운/HTML 내 로컬 이미지를 자동으로 base64 변환하여 학생에게 전송
 - **Cloudflare Tunnel**: 별도 서버 없이 외부 HTTPS URL로 접속 가능
 - **100명 동시 접속**: 교실 규모의 동시 접속자 지원 (설정으로 변경 가능)
 - **다크/라이트 모드**: 뷰어에서 테마 전환 지원
@@ -36,7 +40,7 @@
 ### VSIX 파일로 설치 (권장)
 
 ```bash
-code --install-extension jupyter-live-share-2.0.0.vsix
+code --install-extension jupyter-live-share-2.2.5.vsix
 ```
 
 또는 VS Code → Extensions → `...` → "Install from VSIX..." 에서 `.vsix` 파일 선택
@@ -156,9 +160,14 @@ jupyter-live-share/
 │   ├── extension.ts          # Extension 진입점
 │   ├── server/               # HTTP + WebSocket 서버
 │   ├── notebook/             # 노트북 변경 감지 + 직렬화
-│   ├── ui/                   # StatusBar, Sidebar, Viewer Chat, ViewerPanel, Commands
+│   ├── ui/                   # StatusBar, Sidebar, Viewer Chat, ViewerPanel, TeacherPreview, Commands
 │   └── utils/                # 설정, 로깅
 ├── viewer/                   # 브라우저 뷰어 (Vanilla JS)
+│   ├── viewer.js             # 메인 앱 로직 (WebSocket, 이벤트 처리)
+│   ├── renderer.js           # 노트북/텍스트 렌더링 + 커서 표시
+│   ├── drawing.js            # 판서 캔버스 오버레이 (펜/형광펜/지우개)
+│   ├── websocket.js          # WebSocket 클라이언트
+│   └── style.css             # 스타일시트
 ├── bin/                      # cloudflared 바이너리
 └── test/                     # 테스트 코드
 ```
@@ -181,6 +190,30 @@ vsce package       # VSIX 패키징
 - [docs/vscode-badge-workaround.md](docs/vscode-badge-workaround.md) - VS Code WebviewView.badge 초기화 버그 워크어라운드
 
 ## 변경 이력
+
+### v2.2.0
+
+**실시간 판서 성능 최적화 및 뷰어 렌더링 통일**
+
+- **뷰포트 캔버스 아키텍처**: 전체 문서 높이 대신 3x 뷰포트 버퍼 캔버스로 판서 성능 대폭 개선, 메모리 사용 최소화
+- **DPR 캡 (max 2)**: 고해상도 모바일 기기에서 캔버스 메모리 절감
+- **모든 뷰어 동일 렌더링 보장**: 브라우저/VS Code Viewer/Teacher Preview 모두 992px 고정 폭으로 노트북 콘텐츠 렌더링, 판서 좌표 정확도 보장
+- **오버레이 스크롤바**: 웹 브라우저에서 스크롤바가 레이아웃에 영향을 주지 않도록 얇은 오버레이 스크롤바 적용
+- **형광펜 둥근 커서**: 형광펜 모드에서 반투명 원형 커서로 가시성 향상
+- **커서 위치 정확도 개선**: Canvas measureText 대신 DOM Range API 사용으로 브라우저 간 커서 위치 일관성 확보
+- **Teacher Preview 피드백 루프 방지**: viewport:sync/scroll:sync 이벤트 가드로 Teacher Preview 자동 스크롤 문제 해결
+
+### v2.1.0
+
+**실시간 판서 (Drawing/Annotation) 기능 추가**
+
+- **Teacher Preview 패널**: VS Code 내에서 학생 뷰를 미리보는 WebviewPanel 추가 (`Ctrl+Shift+P` → `Open Teacher Preview`)
+- **판서 도구**: 펜(5색상, 굵기 조절) / 형광펜(반투명) / 지우개, Teacher Preview에서만 활성화
+- **실시간 판서 공유**: 선생님이 그리는 스트로크가 WebSocket으로 학생 브라우저에 실시간 전송
+- **판서 좌표 정규화**: xRatio/yRatio 기반으로 화면 크기가 달라도 동일한 위치에 판서 표시
+- **로컬 이미지 공유**: 마크다운/HTML 내 로컬 이미지(`file://`, 상대 경로)를 base64 data URI로 자동 변환
+- **스크롤 동기화**: Cell-relative Anchor 방식으로 선생님 스크롤 위치를 학생 화면에 정확히 동기화
+- **선생님 커서 영구 표시**: 커서 타임아웃 제거, 마지막 위치에서 무한 깜빡임 (셀 전환 시 자동 정리)
 
 ### v2.0.0
 
