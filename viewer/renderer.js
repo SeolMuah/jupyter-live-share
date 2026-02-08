@@ -2,10 +2,15 @@
 
 const Renderer = (() => {
   const HIGHLIGHT_DEBOUNCE_MS = 150;
-  // 커서 idle 타임아웃: 2초간 입력이 없으면 raw source → rendered 전환
-  // 셀 전환 시 removeCursor()로 즉시 정리, 세션 종료 시 resetCursorState()로 정리
-  const CURSOR_IDLE_TIMEOUT_MS = 2000;
+  // 커서는 idle 타임아웃 없이 영구 표시 (마지막 위치에서 계속 깜빡임).
+  // 정리는 셀 전환 시 removeCursor(), 세션 종료 시 resetCursorState()가 전담.
   let highlightTimers = {};
+  let layoutChangeCallback = null;
+
+  // Markup cells revert to rendered mode after this idle duration (ms).
+  // Code cells are NOT affected — their cursor persists indefinitely.
+  const MARKUP_REVERT_MS = 3000;
+  let markupRevertTimer = null;
 
   /** Current page scroll offset (robust for VS Code Webview iframe) */
   function getScrollY() {
@@ -203,10 +208,7 @@ const Renderer = (() => {
    * Reset all cursor/highlight state (call before full re-render)
    */
   function resetCursorState() {
-    if (cursorTimeout) {
-      clearTimeout(cursorTimeout);
-      cursorTimeout = null;
-    }
+    if (markupRevertTimer) { clearTimeout(markupRevertTimer); markupRevertTimer = null; }
     cursorElement = null;
     selectionElement = null;
     currentCursorCellIndex = -1;
@@ -1012,7 +1014,6 @@ const Renderer = (() => {
    * Show teacher's cursor position in a cell
    */
   let cursorElement = null;
-  let cursorTimeout = null;
   let selectionElement = null;
   let currentCursorCellIndex = -1;
   let documentCursorActive = false;
@@ -1025,13 +1026,13 @@ const Renderer = (() => {
     const cellElement = document.getElementById(`cell-${cellIndex}`);
     if (!cellElement) return;
 
+    // Reset markup revert timer on every cursor:position (any cell)
+    if (markupRevertTimer) { clearTimeout(markupRevertTimer); markupRevertTimer = null; }
+
     // NOTE: cursor:position은 source를 포함하지 않는다.
     // 소스 동기화는 cell:update가 전담한다 (onDidChangeNotebookDocument에서 즉시 전송).
     // 이전에 cursor:position에 source를 포함했을 때, stale getText()가 올바른 소스를
     // 덮어쓰는 버그가 있었다.
-
-    // 기존 타임아웃 취소 (fast/full 공통)
-    if (cursorTimeout) clearTimeout(cursorTimeout);
 
     // === Fast path: 같은 셀이면 커서 오버레이만 업데이트 (DOM 재생성 없음) ===
     if (cellIndex === currentCursorCellIndex) {
@@ -1057,7 +1058,10 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         targetEl ? scrollToCursorElement() : scrollToCellElement(cellElement);
       }
-      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
+      // Markup cells: schedule revert to rendered mode after idle
+      if (rawSourceCode) {
+        markupRevertTimer = setTimeout(() => { markupRevertTimer = null; removeCursor(); }, MARKUP_REVERT_MS);
+      }
       return;
     }
 
@@ -1092,7 +1096,10 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         scrollToCursorElement();
       }
-      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
+      // Markup rendered→raw source changes cell heights — notify drawing layer
+      if (layoutChangeCallback) layoutChangeCallback();
+      // Schedule revert to rendered mode after idle
+      markupRevertTimer = setTimeout(() => { markupRevertTimer = null; removeCursor(); }, MARKUP_REVERT_MS);
       return;
     }
 
@@ -1106,7 +1113,6 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         scrollToCellElement(cellElement);
       }
-      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
       return;
     }
 
@@ -1117,7 +1123,6 @@ const Renderer = (() => {
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
     }
-    cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
   }
 
   /**
@@ -1387,11 +1392,7 @@ const Renderer = (() => {
   }
 
   function removeCursor() {
-    if (cursorTimeout) {
-      clearTimeout(cursorTimeout);
-      cursorTimeout = null;
-    }
-
+    if (markupRevertTimer) { clearTimeout(markupRevertTimer); markupRevertTimer = null; }
     // Flush pending markup render for cursor cell (마지막 글자 렌더링 보장)
     if (currentCursorCellIndex >= 0) {
       const key = `markup-${currentCursorCellIndex}`;
@@ -1403,6 +1404,8 @@ const Renderer = (() => {
     }
 
     document.querySelectorAll('.teacher-cursor, .teacher-line-highlight, .teacher-selection, .teacher-selection-container').forEach(el => el.remove());
+    // Removing raw source restores rendered markup — cell heights change
+    const hadRawSource = document.querySelectorAll('.markup-raw-source').length > 0;
     document.querySelectorAll('.markup-raw-source').forEach(el => el.remove());
     document.querySelectorAll('.cell-markup.raw-source-mode').forEach(el => el.classList.remove('raw-source-mode'));
     document.querySelectorAll('.cell.teacher-editing').forEach(el => el.classList.remove('teacher-editing'));
@@ -1410,6 +1413,9 @@ const Renderer = (() => {
     cursorElement = null;
     selectionElement = null;
     currentCursorCellIndex = -1;
+
+    // Notify drawing layer to redraw strokes at new cell positions
+    if (hadRawSource && layoutChangeCallback) layoutChangeCallback();
   }
 
   // === Plaintext Document Cursor ===
@@ -1485,9 +1491,6 @@ const Renderer = (() => {
     const contentEl = document.getElementById('document-content');
     if (!contentEl) return;
 
-    // 기존 타임아웃 취소 (혹시 남아있을 경우 대비)
-    if (cursorTimeout) clearTimeout(cursorTimeout);
-
     // Markdown 렌더 모드면 raw 소스 모드로 전환 (선생님과 동일한 뷰)
     if (mdDocViewMode === 'rendered' && contentEl.querySelector('.cell-markup')) {
       const wrapper = document.querySelector('.plaintext-document');
@@ -1508,14 +1511,9 @@ const Renderer = (() => {
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
     }
-    cursorTimeout = setTimeout(() => { cursorTimeout = null; removeDocumentCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
   }
 
   function removeDocumentCursor() {
-    if (cursorTimeout) {
-      clearTimeout(cursorTimeout);
-      cursorTimeout = null;
-    }
     removeCursorOverlays();
     documentCursorActive = false;
 
@@ -1541,5 +1539,7 @@ const Renderer = (() => {
     scrollToRatio,
     scrollNotebookToCell,
     scrollToNotebookAnchor,
+    /** Register callback for when cursor removal changes cell layout (markup restore) */
+    onLayoutChange(cb) { layoutChangeCallback = cb; },
   };
 })();

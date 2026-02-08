@@ -194,6 +194,15 @@
     // Drawing module initialization
     Drawing.init(isTeacherPreview);
 
+    // When cursor removal restores markup (raw→rendered), cell heights change —
+    // redraw all drawing strokes at new positions.
+    // Debounce via rAF so layout is fully settled before reading cell positions.
+    let layoutRedrawRAF = 0;
+    Renderer.onLayoutChange(() => {
+      cancelAnimationFrame(layoutRedrawRAF);
+      layoutRedrawRAF = requestAnimationFrame(() => Drawing.redrawAll());
+    });
+
     // VS Code Webview: listen for extension messages (e.g., session reconnect)
     if (isVSCodeWebview) {
       window.addEventListener('message', (event) => {
@@ -376,7 +385,6 @@
         } else {
           if (documentType === 'notebook') {
             Renderer.showTeacherCursor(msg.data);
-            Drawing.invalidateCellCache(); // markup raw/rendered switch changes cell heights
             lastCursorScrollTime = Date.now();
           }
         }

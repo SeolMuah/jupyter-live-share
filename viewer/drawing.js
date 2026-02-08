@@ -103,7 +103,9 @@ const Drawing = (() => {
 
   // --- Coordinate Conversion ---
   // Cell-relative coordinate system:
-  //   { cellIndex, xRatio, yRatio } for WS transmission
+  //   { cellIndex, xRatio, yRatio, yPixel } for WS transmission
+  //   yPixel = absolute pixel offset from cell top (mode-independent accuracy)
+  //   yRatio  = proportional offset (fallback for old strokes without yPixel)
   //   + _x, _y (absolute pixel coords) cached for fast local drawing
 
   // Find cell index from absolute Y using binary search (O(log n))
@@ -135,7 +137,7 @@ const Drawing = (() => {
       const ci = findCellIndex(absY, positions);
       const yOff = absY - positions[ci].top;
       const ch = positions[ci].height || 1;
-      return { cellIndex: ci, xRatio, yRatio: yOff / ch, _x: x, _y: absY };
+      return { cellIndex: ci, xRatio, yRatio: yOff / ch, yPixel: yOff, _x: x, _y: absY };
     }
     return { cellIndex: -1, xRatio, yRatio: absY / (container.scrollHeight || 1), _x: x, _y: absY };
   }
@@ -145,7 +147,12 @@ const Drawing = (() => {
     const x = pt.xRatio * cw;
     let y;
     if (pt.cellIndex >= 0 && positions && pt.cellIndex < positions.length) {
-      y = positions[pt.cellIndex].top + pt.yRatio * (positions[pt.cellIndex].height || 1);
+      // Prefer absolute pixel offset (mode-independent) over proportional ratio
+      if (pt.yPixel !== undefined) {
+        y = positions[pt.cellIndex].top + pt.yPixel;
+      } else {
+        y = positions[pt.cellIndex].top + pt.yRatio * (positions[pt.cellIndex].height || 1);
+      }
     } else {
       y = pt.yRatio * (container.scrollHeight || 1);
     }
@@ -159,7 +166,7 @@ const Drawing = (() => {
     const out = new Array(points.length);
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
-      out[i] = { cellIndex: p.cellIndex, xRatio: p.xRatio, yRatio: p.yRatio };
+      out[i] = { cellIndex: p.cellIndex, xRatio: p.xRatio, yRatio: p.yRatio, yPixel: p.yPixel };
     }
     return out;
   }
@@ -978,6 +985,7 @@ const Drawing = (() => {
   return {
     init,
     invalidateCellCache,
+    redrawAll,
     receiveStroke,
     receiveStroking,
     receiveUndo,
