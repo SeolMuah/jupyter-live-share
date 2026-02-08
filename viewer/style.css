@@ -64,6 +64,12 @@
   padding: 0;
 }
 
+/* Fixed root font-size: all rem units resolve identically across every viewer
+   (browser, VS Code webview, Teacher Preview). Never use vw/% for font-size. */
+html {
+  font-size: 16px;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--bg-primary);
@@ -623,17 +629,7 @@ header {
   background: #1c2128;
 }
 
-/* Responsive table scroll */
-@media (max-width: 768px) {
-  .cell-markup table {
-    font-size: 0.8rem;
-  }
-
-  .cell-markup th,
-  .cell-markup td {
-    padding: 6px 8px;
-  }
-}
+/* Responsive table: removed @media font-size change to prevent drift */
 
 /* === Output === */
 .cell-outputs {
@@ -1349,6 +1345,8 @@ footer label {
 }
 
 /* === Responsive === */
+/* Mobile: only chat UI layout changes. NO notebook content changes
+   (font-size, padding) — content must render identically to prevent drawing drift. */
 @media (max-width: 768px) {
   #app-layout {
     display: block;
@@ -1361,10 +1359,6 @@ footer label {
 
   .chat-edge-tab {
     display: none !important;
-  }
-
-  #notebook-container {
-    padding: 8px;
   }
 
   #chat-resize-handle {
@@ -1402,31 +1396,7 @@ footer label {
   .chat-header,
   .chat-messages,
   .chat-input-area {
-    min-width: 0; /* override desktop min-width for narrow mobile screens */
-  }
-
-  .exec-label {
-    min-width: 36px;
-    font-size: 0.7rem;
-    padding: 6px 4px;
-  }
-
-  .cell-outputs {
-    padding: 8px;
-  }
-
-  .cell-source code {
-    font-size: 0.8rem;
-  }
-
-  .poll-buttons {
-    gap: 6px;
-  }
-
-  .poll-buttons button {
-    min-width: 40px;
-    padding: 6px 12px;
-    font-size: 0.85rem;
+    min-width: 0;
   }
 }
 
