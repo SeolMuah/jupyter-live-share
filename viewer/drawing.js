@@ -766,8 +766,9 @@ const Drawing = (() => {
   function receiveStroke(stroke) {
     strokes.push(stroke);
     intermediateStrokes.delete(stroke.strokeId);
-    // Draw completed stroke on static canvas (incremental, no redrawAll)
-    if (!cellPosCache) buildCellCache();
+    // Always rebuild cell cache — cell heights may have changed since last build
+    // (content updates, output renders, image loads, etc.)
+    invalidateCellCache();
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
     applyScrollTransform(staticCtx);
@@ -943,6 +944,7 @@ const Drawing = (() => {
 
   return {
     init,
+    invalidateCellCache,
     receiveStroke,
     receiveStroking,
     receiveUndo,

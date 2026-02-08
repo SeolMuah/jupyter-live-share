@@ -484,6 +484,7 @@
     if (data.index >= 0 && data.index < notebookCells.length) {
       notebookCells[data.index].source = data.source;
       Renderer.updateCellSource(data.index, data.source);
+      Drawing.invalidateCellCache(); // cell height may change
     } else {
       console.error('[JLS] cell:update DROPPED — index out of bounds:', data.index, '>=', notebookCells.length);
     }
@@ -497,6 +498,7 @@
         notebookCells[data.index].executionOrder = data.executionOrder;
       }
       Renderer.updateCellOutputs(data.index, data.outputs, data.executionOrder);
+      Drawing.invalidateCellCache(); // output changes cell height
     }
   }
 
@@ -530,6 +532,7 @@
       notebookCells.splice(data.index, data.removedCount || 1);
     }
     Renderer.handleStructureChange(data, notebookCells);
+    Drawing.invalidateCellCache(); // cells added/removed changes all positions
   }
 
   function handleSessionEnd() {
