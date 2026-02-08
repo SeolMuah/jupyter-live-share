@@ -51,8 +51,12 @@ export class TeacherPreviewPanel {
     if (TeacherPreviewPanel.currentPanel) {
       const port = getConfig().port;
       const wsUrl = `ws://localhost:${port}`;
-      TeacherPreviewPanel.currentPanel.panel.webview.html =
-        TeacherPreviewPanel.currentPanel.getHtmlContent(wsUrl);
+      // Use postMessage to tell the webview to reconnect (preserves webview state
+      // instead of replacing entire HTML which is unreliable with retainContextWhenHidden)
+      TeacherPreviewPanel.currentPanel.panel.webview.postMessage({
+        type: 'sessionReady',
+        wsUrl,
+      });
     }
   }
 
@@ -158,6 +162,11 @@ export class TeacherPreviewPanel {
   </main>
 
   <aside id="chat-panel" class="chat-panel">
+    <div id="chat-edge-tab" class="chat-edge-tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span class="chat-edge-label">Chat</span>
+      <span class="chat-edge-badge" id="chat-edge-badge" style="display:none;"></span>
+    </div>
     <div class="chat-header">
       <span>Chat</span>
       <button id="chat-close" class="chat-close-btn" title="Close">&times;</button>

@@ -109,6 +109,18 @@ const WsClient = (() => {
     }
   }
 
+  function reconnect(newUrl) {
+    // Update WS URL if provided (e.g., port changed)
+    if (newUrl) window.__WS_URL__ = newUrl;
+
+    // Close existing connection without triggering auto-reconnect
+    disconnect();
+
+    // Reset backoff and reconnect immediately
+    reconnectAttempt = 0;
+    _doConnect();
+  }
+
   function isConnected() {
     return ws && ws.readyState === WebSocket.OPEN;
   }
@@ -121,6 +133,7 @@ const WsClient = (() => {
   return {
     connect,
     disconnect,
+    reconnect,
     isConnected,
     send,
   };

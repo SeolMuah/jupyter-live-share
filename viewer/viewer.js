@@ -60,8 +60,8 @@
   const chatClose = document.getElementById('chat-close');
   const chatCollapse = document.getElementById('chat-collapse');
   const chatResizeHandle = document.getElementById('chat-resize-handle');
-  const chatFloatToggle = document.getElementById('chat-float-toggle');
-  const chatFloatBadge = document.getElementById('chat-float-badge');
+  const chatEdgeTab = document.getElementById('chat-edge-tab');
+  const chatEdgeBadge = document.getElementById('chat-edge-badge');
   const chatEmptyState = document.getElementById('chat-empty-state');
   const btnChat = document.getElementById('btn-chat');
 
@@ -129,7 +129,7 @@
     });
     chatClose?.addEventListener('click', () => toggleChat(false));
     chatCollapse?.addEventListener('click', () => toggleChat(false));
-    chatFloatToggle?.addEventListener('click', () => toggleChat(true));
+    chatEdgeTab?.addEventListener('click', () => toggleChat(true));
     btnChat?.addEventListener('click', () => toggleChat(!chatVisible));
 
     // Chat: restore saved width
@@ -193,6 +193,26 @@
 
     // Drawing module initialization
     Drawing.init(isTeacherPreview);
+
+    // VS Code Webview: listen for extension messages (e.g., session reconnect)
+    if (isVSCodeWebview) {
+      window.addEventListener('message', (event) => {
+        const msg = event.data;
+        if (msg && msg.type === 'sessionReady') {
+          // New session started — reset UI state, re-init Drawing, reconnect WS
+          notebookContainer.innerHTML = '';
+          connectionStatus.style.display = 'block';
+          statusText.textContent = 'Connecting...';
+          notebookCells = [];
+          currentDocument = null;
+          currentPollId = null;
+
+          Drawing.destroy();
+          Drawing.init(isTeacherPreview);
+          WsClient.reconnect(msg.wsUrl || null);
+        }
+      });
+    }
 
     // Teacher scroll sync — 선생님 프리뷰에서만 활성
     if (isTeacherPreview) {
@@ -661,12 +681,10 @@
         chatPanel.classList.remove('collapsed');
         if (appLayout) appLayout.classList.add('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.add('visible');
-        if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
       } else {
         chatPanel.classList.add('collapsed');
         if (appLayout) appLayout.classList.remove('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
-        if (chatFloatToggle) chatFloatToggle.classList.add('visible');
       }
     }
 
@@ -697,13 +715,13 @@
       }
     }
 
-    // Floating toggle badge
-    if (chatFloatBadge) {
+    // Edge tab badge
+    if (chatEdgeBadge) {
       if (unreadCount > 0) {
-        chatFloatBadge.textContent = unreadCount > 99 ? '99+' : unreadCount;
-        chatFloatBadge.style.display = '';
+        chatEdgeBadge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+        chatEdgeBadge.style.display = '';
       } else {
-        chatFloatBadge.style.display = 'none';
+        chatEdgeBadge.style.display = 'none';
       }
     }
   }
@@ -1055,6 +1073,9 @@
       const chatW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-width')) || 340;
       const handleW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--resize-handle-width')) || 4;
       drawToolsPanel.style.right = (chatW + handleW + 12) + 'px';
+    } else if (!isMobile) {
+      const tabW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-tab-width')) || 32;
+      drawToolsPanel.style.right = (tabW + 12) + 'px';
     } else {
       drawToolsPanel.style.right = '12px';
     }
@@ -1074,7 +1095,6 @@
         chatPanel.classList.remove('collapsed');
         if (appLayout) appLayout.classList.remove('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
-        if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         if (!chatVisible) {
           chatPanel.classList.remove('open');
         } else {
@@ -1087,11 +1107,9 @@
           chatPanel.classList.remove('collapsed');
           if (appLayout) appLayout.classList.add('chat-open');
           if (chatResizeHandle) chatResizeHandle.classList.add('visible');
-          if (chatFloatToggle) chatFloatToggle.classList.remove('visible');
         } else {
           chatPanel.classList.add('collapsed');
           if (appLayout) appLayout.classList.remove('chat-open');
-          if (chatFloatToggle) chatFloatToggle.classList.add('visible');
         }
       }
     }

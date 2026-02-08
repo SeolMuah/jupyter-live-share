@@ -220,9 +220,9 @@ const Drawing = (() => {
     // Teacher preview: fix container width to match student view's max-width (960px).
     // Different container widths cause different text wrapping -> different scrollHeight
     // -> coordinate positions drift. Fixed width ensures identical layout.
+    // border-box (global CSS) includes padding 16px×2, so 960+32=992px needed for 960px content area.
     if (isTeacher) {
-      container.style.minWidth = '960px';
-      container.style.boxSizing = 'border-box';
+      container.style.minWidth = '992px';
       document.body.style.overflowX = 'auto';
     }
 
