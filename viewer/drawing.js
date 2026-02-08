@@ -47,6 +47,8 @@ const Drawing = (() => {
   let cachedCW = 0;
 
   // Viewport canvas scroll tracking
+  const BUFFER_MULTIPLIER = 3; // canvas height = 3x viewport (1 above + current + 1 below)
+  let canvasTop = 0;           // canvas absolute top position within container
   let cachedScrollOffset = 0;
   let scrollRAFPending = false;
 
@@ -93,10 +95,10 @@ const Drawing = (() => {
     context.restore();
   }
 
-  // Apply DPR + scroll offset transform (absolute coords → viewport coords)
+  // Apply DPR + canvasTop transform (absolute coords → canvas-local coords)
   function applyScrollTransform(context) {
-    const dpr = isTeacher ? 1 : (window.devicePixelRatio || 1);
-    context.setTransform(dpr, 0, 0, dpr, 0, -cachedScrollOffset * dpr);
+    const dpr = isTeacher ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    context.setTransform(dpr, 0, 0, dpr, 0, -canvasTop * dpr);
   }
 
   // --- Coordinate Conversion ---
@@ -213,11 +215,17 @@ const Drawing = (() => {
     cellsDiv = document.getElementById('notebook-cells');
     if (!container || !cellsDiv) return;
 
-    // ALL viewers must render content at identical width to prevent drawing drift.
-    // #notebook-cells has max-width:960px, container has 16px padding each side = 992px.
-    // Force min-width so text wrapping and cell heights are identical everywhere.
-    // Narrow viewports get horizontal scroll instead of reflowing content.
+    // ALL viewers must render content at EXACTLY identical dimensions to prevent
+    // drawing drift. Using flex:none + width (not flex:1 + min-width) so the
+    // container is immune to scrollbar width, viewport size, and flex layout
+    // differences between web browser and VS Code webview.
+    // Container: 992px = 960px content + 16px padding × 2 (box-sizing: border-box)
+    // Cells: 960px (set in CSS as width, not max-width)
+    // → cellsDiv.clientWidth = 960px, cellsDiv.offsetLeft = 16px in ALL environments.
+    container.style.width = '992px';
     container.style.minWidth = '992px';
+    container.style.flex = 'none';
+    container.style.margin = '0 auto'; // center within flex container on wide viewports
     document.body.style.overflowX = 'auto';
 
     container.style.position = 'relative';
@@ -266,16 +274,17 @@ const Drawing = (() => {
   function resizeCanvas() {
     if (!canvas || !staticCanvas || !container) return;
     if (!staticCtx || !ctx) return;
-    const dpr = isTeacher ? 1 : (window.devicePixelRatio || 1);
+    const dpr = isTeacher ? 1 : Math.min(window.devicePixelRatio || 1, 2);
     const w = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
-    const h = window.innerHeight; // viewport height instead of scrollHeight
+    const vh = window.innerHeight;
+    const h = vh * BUFFER_MULTIPLIER; // 3x viewport
     const leftOffset = cellsDiv ? cellsDiv.offsetLeft : 0;
     cachedScrollOffset = getScrollOffset();
+    canvasTop = Math.max(0, cachedScrollOffset - vh); // 1 viewport above current scroll
 
-    // Both canvases: viewport-sized, positioned at scroll offset
     for (const cvs of [staticCanvas, canvas]) {
       cvs.style.left = leftOffset + 'px';
-      cvs.style.top = cachedScrollOffset + 'px';
+      cvs.style.top = canvasTop + 'px';
       cvs.style.width = w + 'px';
       cvs.style.height = h + 'px';
       cvs.width = w * dpr;
@@ -299,14 +308,26 @@ const Drawing = (() => {
   function repositionCanvases() {
     if (!canvas || !staticCanvas || !container) return;
     const scrollOffset = getScrollOffset();
-    if (Math.abs(scrollOffset - cachedScrollOffset) < 1) return;
     cachedScrollOffset = scrollOffset;
 
-    // 1. Update CSS position
-    staticCanvas.style.top = scrollOffset + 'px';
-    canvas.style.top = scrollOffset + 'px';
+    const vh = window.innerHeight;
+    const bufferTop = canvasTop;
+    const bufferBottom = canvasTop + vh * BUFFER_MULTIPLIER;
 
-    // 2. Redraw static canvas
+    // Only reposition when scroll nears buffer edge (25% margin)
+    const margin = vh * 0.25;
+    const needsReposition =
+      scrollOffset < bufferTop + margin ||
+      scrollOffset + vh > bufferBottom - margin;
+
+    if (!needsReposition) return; // still within buffer — no redraw needed
+
+    // Reposition canvas
+    canvasTop = Math.max(0, scrollOffset - vh);
+    staticCanvas.style.top = canvasTop + 'px';
+    canvas.style.top = canvasTop + 'px';
+
+    // Redraw static canvas
     clearCanvas(staticCtx, staticCanvas);
     applyScrollTransform(staticCtx);
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
@@ -315,7 +336,7 @@ const Drawing = (() => {
       drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
 
-    // 3. Redraw active canvas if needed
+    // Redraw active canvas if needed
     clearCanvas(ctx, canvas);
     applyScrollTransform(ctx);
     if (currentStroke && currentStroke.points.length > 0) {
@@ -741,10 +762,11 @@ const Drawing = (() => {
     if (!staticCtx || !staticCanvas || !container) return;
     if (!skipCacheInvalidation) invalidateCellCache();
     cachedScrollOffset = getScrollOffset();
+    canvasTop = Math.max(0, cachedScrollOffset - window.innerHeight);
 
     // Update canvas positions
-    staticCanvas.style.top = cachedScrollOffset + 'px';
-    canvas.style.top = cachedScrollOffset + 'px';
+    staticCanvas.style.top = canvasTop + 'px';
+    canvas.style.top = canvasTop + 'px';
 
     // Clear and re-apply transform
     clearCanvas(staticCtx, staticCanvas);
@@ -766,14 +788,22 @@ const Drawing = (() => {
   function receiveStroke(stroke) {
     strokes.push(stroke);
     intermediateStrokes.delete(stroke.strokeId);
-    // Always rebuild cell cache — cell heights may have changed since last build
-    // (content updates, output renders, image loads, etc.)
     invalidateCellCache();
+
+    // Refresh scroll offset to prevent stale canvasTop usage
+    cachedScrollOffset = getScrollOffset();
+    const vh = window.innerHeight;
+    if (cachedScrollOffset < canvasTop || cachedScrollOffset + vh > canvasTop + vh * BUFFER_MULTIPLIER) {
+      // Stroke area outside buffer — reposition and full redraw
+      resizeCanvas();
+      redrawAll();
+      return;
+    }
+
     const cw = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const positions = getCellPositions();
     applyScrollTransform(staticCtx);
     drawSmoothStroke(staticCtx, stroke, cw, positions);
-    // Redraw active canvas with remaining intermediates only
     redrawIntermediateCanvas();
   }
 
@@ -808,6 +838,8 @@ const Drawing = (() => {
 
   function redrawIntermediateCanvas() {
     if (!ctx || !container) return;
+    // Refresh scroll offset to prevent stale transform
+    cachedScrollOffset = getScrollOffset();
     clearCanvas(ctx, canvas);
     applyScrollTransform(ctx);
     if (intermediateStrokes.size === 0) return;
@@ -917,6 +949,7 @@ const Drawing = (() => {
     cachedContainerTop = 0;
     cachedCW = 0;
     cachedScrollOffset = 0;
+    canvasTop = 0;
 
     // Reset drawing mode
     drawingMode = false;

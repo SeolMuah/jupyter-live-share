@@ -251,30 +251,35 @@
 
   function computeScrollAnchor() {
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-    const scrollY = getScrollY();
-    const viewportTop = scrollY + headerHeight;
 
     if (documentType === 'notebook') {
       const cells = document.querySelectorAll('#notebook-cells .cell');
       let anchorCell = null;
+      let anchorRect = null;
       let anchorIndex = 0;
 
+      // Use getBoundingClientRect for reliable positioning regardless of
+      // positioned ancestors (container has position:relative for canvas overlay)
       for (let i = 0; i < cells.length; i++) {
-        if (cells[i].offsetTop + cells[i].offsetHeight > viewportTop) {
+        const rect = cells[i].getBoundingClientRect();
+        if (rect.bottom > headerHeight) {
           anchorCell = cells[i];
+          anchorRect = rect;
           anchorIndex = i;
           break;
         }
       }
       if (!anchorCell) return null;
 
+      // How far into the cell the visible area top (header bottom) is
       const offsetRatio = Math.max(0, Math.min(1,
-        (viewportTop - anchorCell.offsetTop) / (anchorCell.offsetHeight || 1)
+        (headerHeight - anchorRect.top) / (anchorRect.height || 1)
       ));
       return { type: 'notebook', cellIndex: anchorIndex, offsetRatio };
     }
 
     // Plaintext: 비율 기반
+    const scrollY = getScrollY();
     const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
     if (maxScroll <= 0) return null;
     return { type: 'plaintext', scrollRatio: scrollY / maxScroll };
@@ -354,11 +359,14 @@
 
       case 'focus:cell':
         if (documentType === 'notebook') {
+          // focus:cell fires on deliberate cell click — all viewers (including teacher preview) should follow
           Renderer.setActiveCell(msg.data.cellIndex);
         }
         break;
 
       case 'cursor:position':
+        // All viewers (including teacher preview) display cursor identically.
+        // Teacher preview auto-scroll fight is prevented by viewport:sync / scroll:sync guards only.
         // Mode-aware: plaintext cursor has mode:'plaintext', notebook cursor has no mode field
         if (msg.data.mode === 'plaintext') {
           if (documentType === 'plaintext') {
@@ -368,6 +376,7 @@
         } else {
           if (documentType === 'notebook') {
             Renderer.showTeacherCursor(msg.data);
+            Drawing.invalidateCellCache(); // markup raw/rendered switch changes cell heights
             lastCursorScrollTime = Date.now();
           }
         }
@@ -554,6 +563,8 @@
   // === Viewport Sync (plaintext 전용 — 노트북은 cursor:position이 스크롤 담당) ===
 
   function handleViewportSync(data) {
+    // Teacher preview: skip (teacher controls their own scroll)
+    if (isTeacherPreview) return;
     if (data.mode === 'plaintext' && documentType === 'plaintext') {
       // 마크다운 문서는 viewport:sync 무시 — cursor:position으로만 스크롤
       // (마크다운은 렌더된 HTML과 소스 라인이 1:1 대응이 안 되어 viewport 라인 기반 스크롤이 부정확)

@@ -203,6 +203,8 @@ export class ViewerPanel {
     </div>
   </header>
 
+  <!-- 앱 레이아웃 (노트북 + 채팅 사이드바) -->
+  <div id="app-layout">
   <!-- 노트북 컨텐츠 -->
   <main id="notebook-container">
     <!-- 설문 배너 -->
@@ -227,6 +229,7 @@ export class ViewerPanel {
       <button id="chat-send">Send</button>
     </div>
   </aside>
+  </div>
 
   <!-- 설문 생성 모달 (선생님 전용) -->
   <div id="poll-modal" class="poll-modal-overlay" style="display:none;">

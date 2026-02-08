@@ -68,6 +68,32 @@
    (browser, VS Code webview, Teacher Preview). Never use vw/% for font-size. */
 html {
   font-size: 16px;
+  scrollbar-width: thin;     /* Firefox: thin scrollbar (less layout space) */
+}
+
+/* Chromium: narrow scrollbar to minimize layout impact (8px vs default 17px).
+   True overlay (0px) depends on OS settings; this is a reliable cross-platform fallback. */
+html::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html::-webkit-scrollbar-track {
+  background: transparent;
+}
+html::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+html::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Dark theme scrollbar */
+[data-theme="dark"]::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+[data-theme="dark"]::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 body {
@@ -222,7 +248,7 @@ header {
 }
 
 #notebook-cells {
-  max-width: 960px;
+  width: 960px;
   margin: 0 auto;
 }
 

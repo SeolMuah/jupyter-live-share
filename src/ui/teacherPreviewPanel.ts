@@ -113,6 +113,18 @@ export class TeacherPreviewPanel {
     window.__TEACHER_PREVIEW__ = true;
     window.__WS_URL__ = ${JSON.stringify(wsUrl)};
   </script>
+  <style nonce="${nonce}">
+    /* Teacher Preview: disable text selection to prevent interference with drawing */
+    body {
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: default;
+    }
+    /* Prevent text cursor on code/markup areas */
+    pre, code, .cell-source, .cell-markup, .cell-outputs, #notebook-cells {
+      cursor: default;
+    }
+  </style>
 </head>
 <body>
   <!-- PIN/Name screens hidden for teacher preview -->
@@ -149,6 +161,7 @@ export class TeacherPreviewPanel {
     </div>
   </header>
 
+  <div id="app-layout">
   <main id="notebook-container">
     <div id="poll-banner" style="display:none;">
       <div class="poll-question" id="poll-question"></div>
@@ -175,6 +188,7 @@ export class TeacherPreviewPanel {
       <button id="chat-send">Send</button>
     </div>
   </aside>
+  </div>
 
   <div id="poll-modal" class="poll-modal-overlay" style="display:none;">
     <div class="poll-modal-box">

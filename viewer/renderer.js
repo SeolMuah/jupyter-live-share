@@ -7,6 +7,12 @@ const Renderer = (() => {
   const CURSOR_IDLE_TIMEOUT_MS = 2000;
   let highlightTimers = {};
 
+  /** Current page scroll offset (robust for VS Code Webview iframe) */
+  function getScrollY() {
+    return window.scrollY || window.pageYOffset
+      || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  }
+
   /**
    * Debounced highlight: 텍스트는 즉시 반영, 하이라이팅은 지연
    */
@@ -575,7 +581,7 @@ const Renderer = (() => {
    * Set the active (focused) cell — highlight + scroll if needed
    * 선생님이 셀을 클릭하면 학생 화면도 해당 셀이 보이도록 스크롤
    */
-  function setActiveCell(index) {
+  function setActiveCell(index, skipScroll) {
     // Remove existing active
     document.querySelectorAll('.cell.active').forEach((el) => {
       el.classList.remove('active');
@@ -585,14 +591,19 @@ const Renderer = (() => {
     if (cellEl) {
       cellEl.classList.add('active');
 
-      // Auto-scroll이 켜져 있으면 셀을 화면 상단으로 스크롤
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked) {
-        const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-        window.scrollTo({
-          top: Math.max(0, cellEl.offsetTop - headerHeight - 8),
-          behavior: 'auto'
-        });
+      // Auto-scroll (skipScroll for teacher preview — teacher controls their own scroll)
+      if (!skipScroll) {
+        const autoScroll = document.getElementById('auto-scroll');
+        if (autoScroll && autoScroll.checked) {
+          const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+          // Use getBoundingClientRect for reliable positioning regardless of
+          // positioned ancestors (container has position:relative for canvas overlay)
+          const rect = cellEl.getBoundingClientRect();
+          window.scrollTo({
+            top: Math.max(0, rect.top + getScrollY() - headerHeight - 8),
+            behavior: 'auto'
+          });
+        }
       }
     }
   }
@@ -695,7 +706,7 @@ const Renderer = (() => {
     }
 
     window.scrollTo({
-      top: Math.max(0, cellEl.offsetTop - headerHeight - 8),
+      top: Math.max(0, rect.top + getScrollY() - headerHeight - 8),
       behavior: 'auto'
     });
   }
@@ -709,11 +720,11 @@ const Renderer = (() => {
     if (!cellEl) return;
 
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-    const targetScroll = cellEl.offsetTop + (cellEl.offsetHeight * offsetRatio) - headerHeight;
-
-    // 현재 스크롤 위치 (VS Code Webview iframe 호환)
-    const currentScroll = window.scrollY || window.pageYOffset
-      || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    // Use getBoundingClientRect for reliable positioning regardless of
+    // positioned ancestors (container has position:relative for canvas overlay)
+    const rect = cellEl.getBoundingClientRect();
+    const currentScroll = getScrollY();
+    const targetScroll = rect.top + currentScroll + (rect.height * offsetRatio) - headerHeight;
 
     // 이미 5px 이내면 스크롤 생략 (jitter 방지)
     if (Math.abs(currentScroll - targetScroll) < 5) return;
