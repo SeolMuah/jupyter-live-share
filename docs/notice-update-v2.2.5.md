@@ -1,8 +1,8 @@
-# [공지] Jupyter Live Share 업데이트 안내 (v2.2.5)
+# [공지] Jupyter Live Share 익스텐션 업데이트 안내 (v2.2.5)
 
 안녕하세요.
 
-Jupyter Live Share가 **v2.2.5로 업데이트**되었습니다.
+Jupyter Live Share 익스텐션이 **v2.2.5로 업데이트**되었습니다.
 **판서(Drawing)**, **Teacher Preview**, **커서 영구 표시** 등 여러 기능이 추가되었습니다.
 
 **1~2분이면 끝나니** 수업 전에 꼭 업데이트해 주세요.
