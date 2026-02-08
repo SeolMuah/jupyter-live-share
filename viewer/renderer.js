@@ -2,8 +2,9 @@
 
 const Renderer = (() => {
   const HIGHLIGHT_DEBOUNCE_MS = 150;
-  // 커서 타임아웃 제거: 선생님 커서는 마지막 위치에 계속 표시
-  // 셀 전환 시 removeCursor()로 정리, 세션 종료 시 resetCursorState()로 정리
+  // 커서 idle 타임아웃: 2초간 입력이 없으면 raw source → rendered 전환
+  // 셀 전환 시 removeCursor()로 즉시 정리, 세션 종료 시 resetCursorState()로 정리
+  const CURSOR_IDLE_TIMEOUT_MS = 2000;
   let highlightTimers = {};
 
   /**
@@ -30,6 +31,34 @@ const Renderer = (() => {
   }
 
   const LARGE_CELL_LINE_THRESHOLD = 200;
+
+  // marked.js math extension: $...$ 및 $$...$$ 수식을 emphasis 토크나이저보다 먼저 인식
+  // GFM이 underscore(_)를 em/strong으로 처리하기 전에 수식을 보호
+  marked.use({
+    extensions: [{
+      name: 'math',
+      level: 'inline',
+      start(src) { return src.indexOf('$'); },
+      tokenizer(src) {
+        // display math $$...$$
+        const displayMatch = src.match(/^\$\$([\s\S]+?)\$\$/);
+        if (displayMatch) {
+          return { type: 'math', raw: displayMatch[0], text: displayMatch[1], displayMode: true };
+        }
+        // inline math $...$  (no space after opening $, prevents $5 false positive)
+        const inlineMatch = src.match(/^\$([^\s$](?:[^$]*?[^\s$])?)\$/);
+        if (inlineMatch) {
+          return { type: 'math', raw: inlineMatch[0], text: inlineMatch[1], displayMode: false };
+        }
+        return undefined;
+      },
+      renderer(token) {
+        const escaped = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const delim = token.displayMode ? '$$' : '$';
+        return `<span class="math-tex">${delim}${escaped}${delim}</span>`;
+      },
+    }],
+  });
 
   /**
    * Atomic highlight update: hljs.highlight() + innerHTML in one shot.
@@ -468,6 +497,8 @@ const Renderer = (() => {
           delimiters: [
             { left: '$$', right: '$$', display: true },
             { left: '$', right: '$', display: false },
+            { left: '\\(', right: '\\)', display: false },
+            { left: '\\[', right: '\\]', display: true },
           ],
           throwOnError: false,
         });
@@ -1015,6 +1046,7 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         targetEl ? scrollToCursorElement() : scrollToCellElement(cellElement);
       }
+      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
       return;
     }
 
@@ -1049,6 +1081,7 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         scrollToCursorElement();
       }
+      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
       return;
     }
 
@@ -1062,6 +1095,7 @@ const Renderer = (() => {
       if (autoScroll && autoScroll.checked) {
         scrollToCellElement(cellElement);
       }
+      cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
       return;
     }
 
@@ -1072,6 +1106,7 @@ const Renderer = (() => {
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
     }
+    cursorTimeout = setTimeout(() => { cursorTimeout = null; removeCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
   }
 
   /**
@@ -1462,6 +1497,7 @@ const Renderer = (() => {
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
     }
+    cursorTimeout = setTimeout(() => { cursorTimeout = null; removeDocumentCursor(); }, CURSOR_IDLE_TIMEOUT_MS);
   }
 
   function removeDocumentCursor() {
