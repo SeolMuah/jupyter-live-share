@@ -213,11 +213,12 @@ const Drawing = (() => {
     cellsDiv = document.getElementById('notebook-cells');
     if (!container || !cellsDiv) return;
 
-    // Teacher preview: fix container width to match student view's max-width (960px).
-    // Different container widths cause different text wrapping -> different scrollHeight
-    // -> coordinate positions drift. Fixed width ensures identical layout.
-    // border-box (global CSS) includes padding 16px×2, so 960+32=992px needed for 960px content area.
-    if (isTeacher) {
+    // VS Code webview panels (teacher preview AND student viewer) may be narrower
+    // than the browser's 960px content area. Different widths cause different text
+    // wrapping -> cell heights change -> drawing positions drift relative to content.
+    // Force min-width to match browser's max-width (960px + 32px padding = 992px).
+    const isVSCode = typeof window.__VSCODE_WEBVIEW__ !== 'undefined';
+    if (isVSCode) {
       container.style.minWidth = '992px';
       document.body.style.overflowX = 'auto';
     }
