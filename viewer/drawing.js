@@ -625,6 +625,11 @@ const Drawing = (() => {
       });
     }
 
+    // Simplify points FIRST — teacher must store the same simplified version
+    // that students receive, otherwise Bezier interpolation differs subtly.
+    const simplified = simplifyPoints(stripInternalCoords(currentStroke.points));
+    currentStroke.points = simplified;
+
     // Move completed stroke to static canvas
     strokes.push(currentStroke);
 
@@ -646,7 +651,7 @@ const Drawing = (() => {
       color: currentStroke.color,
       width: currentStroke.width,
       alpha: currentStroke.alpha,
-      points: simplifyPoints(stripInternalCoords(currentStroke.points)),
+      points: simplified,
     });
 
     currentStroke = null;
