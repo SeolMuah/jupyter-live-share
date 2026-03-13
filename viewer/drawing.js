@@ -36,6 +36,7 @@ const Drawing = (() => {
   // ResizeObserver debounce
   let resizeTimer = null;
   let resizeObserver = null;
+  let viewportResizeTimer = null;
   const RESIZE_DEBOUNCE_MS = 100;
 
   // Intermediate stroking state — Map of strokeId → {tool, color, width, alpha, points[]}
@@ -216,6 +217,9 @@ const Drawing = (() => {
     return cvs.getContext('2d');
   }
 
+  // Track whether the user has manually dragged the tools panel
+  let toolsPanelDragged = false;
+
   function init(isTeacherPreview) {
     isTeacher = isTeacherPreview;
     container = document.getElementById('notebook-container');
@@ -258,6 +262,8 @@ const Drawing = (() => {
         invalidateCellCache();
         resizeCanvas();
         redrawAll();
+        // Reposition tools panel on content resize (keeps it stuck to content right edge)
+        if (!toolsPanelDragged) positionToolsPanelRight();
       }, RESIZE_DEBOUNCE_MS);
     });
     resizeObserver.observe(container);
@@ -265,6 +271,12 @@ const Drawing = (() => {
     // Scroll listeners for viewport canvas repositioning
     window.addEventListener('scroll', onContainerScroll, { passive: true });
     container.addEventListener('scroll', onContainerScroll, { passive: true });
+
+    // Viewport resize → canvas resize (VS Code panel height change, browser window resize)
+    window.addEventListener('resize', onViewportResize);
+
+    // Restore drawing when panel becomes visible again (GPU bitmap loss recovery)
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     // Toolbar setup — tools panel on right side, toggle in footer
     toolsPanel = document.getElementById('draw-tools-panel');
@@ -275,6 +287,58 @@ const Drawing = (() => {
       if (toggle) toggle.style.display = '';
       setupToolbar();
       setupPointerEvents();
+
+      // Reposition tools panel on viewport resize (Teacher View width change)
+      // Named function for proper cleanup in destroy()
+      window.addEventListener('resize', onWindowResizeToolsPanel);
+
+      // Initial positioning (deferred to after layout)
+      requestAnimationFrame(() => positionToolsPanelRight());
+    }
+  }
+
+  /**
+   * Position the tools panel at the right edge of the content container.
+   * Always sticks to content right, regardless of Teacher View width.
+   */
+  function positionToolsPanelRight() {
+    if (!toolsPanel || !container) return;
+    const containerRect = container.getBoundingClientRect();
+    const panelWidth = toolsPanel.offsetWidth || 52;
+    const gap = 4; // px gap between content and panel
+    let leftPos = containerRect.right + gap;
+
+    // Clamp: if panel would overflow viewport right edge, pin to viewport right
+    if (leftPos + panelWidth > window.innerWidth) {
+      leftPos = window.innerWidth - panelWidth - 2;
+    }
+
+    toolsPanel.style.position = 'fixed';
+    toolsPanel.style.left = leftPos + 'px';
+    toolsPanel.style.right = 'auto';
+    toolsPanel.style.top = '50%';
+    toolsPanel.style.transform = 'translateY(-50%)';
+  }
+
+  function onWindowResizeToolsPanel() {
+    if (!toolsPanelDragged) positionToolsPanelRight();
+  }
+
+  function onViewportResize() {
+    if (viewportResizeTimer) clearTimeout(viewportResizeTimer);
+    viewportResizeTimer = setTimeout(() => {
+      viewportResizeTimer = null;
+      if (window.innerHeight < 1) return; // hidden panel — skip
+      invalidateCellCache();
+      resizeCanvas();
+      redrawAll();
+    }, RESIZE_DEBOUNCE_MS);
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible' && (strokes.length > 0 || intermediateStrokes.size > 0) && window.innerHeight > 0) {
+      resizeCanvas();
+      redrawAll();
     }
   }
 
@@ -284,6 +348,10 @@ const Drawing = (() => {
     const dpr = isTeacher ? 1 : Math.min(window.devicePixelRatio || 1, 2);
     const w = cellsDiv ? cellsDiv.clientWidth : container.clientWidth;
     const vh = window.innerHeight;
+
+    // Skip resize when panel is hidden/minimized — prevents 0-height canvas destroying strokes
+    if (vh < 1 || w < 1) return;
+
     const h = vh * BUFFER_MULTIPLIER; // 3x viewport
     const leftOffset = cellsDiv ? cellsDiv.offsetLeft : 0;
     cachedScrollOffset = getScrollOffset();
@@ -404,6 +472,54 @@ const Drawing = (() => {
     }
 
     if (!toolsPanel) return;
+
+    // --- Drag handle for moving the panel ---
+    const dragHandle = document.createElement('div');
+    dragHandle.className = 'drag-handle';
+    toolsPanel.insertBefore(dragHandle, toolsPanel.firstChild);
+
+    let isDragging = false, dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
+
+    dragHandle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      const rect = toolsPanel.getBoundingClientRect();
+      panelStartX = rect.left;
+      panelStartY = rect.top;
+      toolsPanel.classList.add('dragging');
+      dragHandle.setPointerCapture(e.pointerId);
+    });
+
+    dragHandle.addEventListener('pointermove', (e) => {
+      if (!isDragging) return;
+      e.preventDefault();
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      let newX = panelStartX + dx;
+      let newY = panelStartY + dy;
+      // Clamp to viewport
+      const pw = toolsPanel.offsetWidth;
+      const ph = toolsPanel.offsetHeight;
+      newX = Math.max(0, Math.min(window.innerWidth - pw, newX));
+      newY = Math.max(0, Math.min(window.innerHeight - ph, newY));
+      // Switch from right/top+transform to left/top positioning
+      toolsPanel.style.right = 'auto';
+      toolsPanel.style.transform = 'none';
+      toolsPanel.style.left = newX + 'px';
+      toolsPanel.style.top = newY + 'px';
+    });
+
+    const endDrag = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      toolsPanel.classList.remove('dragging');
+      toolsPanelDragged = true; // user manually positioned — don't auto-reposition
+    };
+    dragHandle.addEventListener('pointerup', endDrag);
+    dragHandle.addEventListener('pointercancel', endDrag);
 
     toolsPanel.querySelectorAll('.tool-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -653,10 +769,9 @@ const Drawing = (() => {
       });
     }
 
-    // Simplify points FIRST — teacher must store the same simplified version
-    // that students receive, otherwise Bezier interpolation differs subtly.
-    const simplified = simplifyPoints(stripInternalCoords(currentStroke.points));
-    currentStroke.points = simplified;
+    // Strip internal coordinates, keep all original points (no simplification)
+    const cleaned = stripInternalCoords(currentStroke.points);
+    currentStroke.points = cleaned;
 
     // Move completed stroke to static canvas
     strokes.push(currentStroke);
@@ -679,7 +794,7 @@ const Drawing = (() => {
       color: currentStroke.color,
       width: currentStroke.width,
       alpha: currentStroke.alpha,
-      points: simplified,
+      points: cleaned,
     });
 
     currentStroke = null;
@@ -720,7 +835,7 @@ const Drawing = (() => {
     }
   }
 
-  // --- Smooth Drawing (Quadratic Bezier Curves) ---
+  // --- Stroke Drawing (Direct lineTo — no smoothing/interpolation) ---
 
   function drawSmoothStroke(targetCtx, stroke, cw, positions) {
     if (!targetCtx || !stroke.points || stroke.points.length === 0) return;
@@ -739,26 +854,14 @@ const Drawing = (() => {
       targetCtx.arc(x, y, stroke.width / 2, 0, Math.PI * 2);
       targetCtx.fillStyle = stroke.color;
       targetCtx.fill();
-    } else if (pts.length === 2) {
-      const p0 = ptToPixelXY(pts[0], cw, positions);
-      const p1 = ptToPixelXY(pts[1], cw, positions);
-      targetCtx.beginPath();
-      targetCtx.moveTo(p0.x, p0.y);
-      targetCtx.lineTo(p1.x, p1.y);
-      targetCtx.stroke();
     } else {
       const p0 = ptToPixelXY(pts[0], cw, positions);
       targetCtx.beginPath();
       targetCtx.moveTo(p0.x, p0.y);
-
-      for (let i = 1; i < pts.length - 1; i++) {
-        const cp = ptToPixelXY(pts[i], cw, positions);
-        const next = ptToPixelXY(pts[i + 1], cw, positions);
-        targetCtx.quadraticCurveTo(cp.x, cp.y, (cp.x + next.x) / 2, (cp.y + next.y) / 2);
+      for (let i = 1; i < pts.length; i++) {
+        const p = ptToPixelXY(pts[i], cw, positions);
+        targetCtx.lineTo(p.x, p.y);
       }
-
-      const last = ptToPixelXY(pts[pts.length - 1], cw, positions);
-      targetCtx.lineTo(last.x, last.y);
       targetCtx.stroke();
     }
 
@@ -788,6 +891,11 @@ const Drawing = (() => {
     for (const stroke of strokes) {
       drawSmoothStroke(staticCtx, stroke, cw, positions);
     }
+
+    // Restore in-progress intermediate strokes (draw:stroking) on active canvas
+    if (intermediateStrokes.size > 0 && ctx) {
+      redrawIntermediateCanvasInner(cw, positions);
+    }
   }
 
   // --- Receive handlers (student side) ---
@@ -796,6 +904,9 @@ const Drawing = (() => {
     strokes.push(stroke);
     intermediateStrokes.delete(stroke.strokeId);
     invalidateCellCache();
+
+    // Panel hidden — store stroke but defer rendering until visible
+    if (window.innerHeight < 1) return;
 
     // Refresh scroll offset to prevent stale canvasTop usage
     cachedScrollOffset = getScrollOffset();
@@ -838,6 +949,9 @@ const Drawing = (() => {
     for (let i = 0; i < data.points.length; i++) {
       entry.points.push(data.points[i]);
     }
+
+    // Panel hidden — data accumulated but defer rendering
+    if (window.innerHeight < 1) return;
 
     // Redraw all intermediates on active canvas
     redrawIntermediateCanvas();
@@ -916,6 +1030,7 @@ const Drawing = (() => {
     strokes = data.strokes || [];
     intermediateStrokes.clear();
     invalidateCellCache();
+    if (window.innerHeight < 1) return; // defer rendering until visible
     redrawAll();
   }
 
@@ -937,12 +1052,19 @@ const Drawing = (() => {
     // Cancel any pending operations
     if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
     if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
+    if (viewportResizeTimer) { clearTimeout(viewportResizeTimer); viewportResizeTimer = null; }
     if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
     scrollRAFPending = false;
 
-    // Remove scroll listeners
+    // Remove scroll and resize listeners
     window.removeEventListener('scroll', onContainerScroll);
+    window.removeEventListener('resize', onViewportResize);
+    window.removeEventListener('resize', onWindowResizeToolsPanel);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     if (container) container.removeEventListener('scroll', onContainerScroll);
+
+    // Reset tools panel state
+    toolsPanelDragged = false;
 
     // Clear state
     strokes = [];

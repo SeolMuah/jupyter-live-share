@@ -6,6 +6,15 @@ const Renderer = (() => {
   // 정리는 셀 전환 시 removeCursor(), 세션 종료 시 resetCursorState()가 전담.
   let highlightTimers = {};
   let layoutChangeCallback = null;
+  let lastRenderedHash = {};
+
+  function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+    }
+    return hash;
+  }
 
   // Markup cells revert to rendered mode after this idle duration (ms).
   // Code cells are NOT affected — their cursor persists indefinitely.
@@ -42,6 +51,26 @@ const Renderer = (() => {
   }
 
   const LARGE_CELL_LINE_THRESHOLD = 200;
+
+  // 단일 물결표(~text~) 취소선 비활성화 — 이중 물결표(~~text~~)만 허용
+  // marked v12 GFM 내장 del 정규식이 단일 물결표도 매칭하므로 2단계 방어 적용
+
+  // 1단계: marked 내장 GFM del 정규식을 이중 물결표 전용으로 직접 교체 (시도)
+  if (marked.Lexer && marked.Lexer.rules &&
+      marked.Lexer.rules.inline && marked.Lexer.rules.inline.gfm) {
+    try {
+      marked.Lexer.rules.inline.gfm.del = /^~~([^~][\s\S]*?)~~(?=[^~]|$)/;
+    } catch (e) { /* frozen 객체면 2단계 폴백 */ }
+  }
+
+  // 2단계: 소스 전처리 — 단일 물결표를 HTML 엔티티로 이스케이프 (확실한 폴백)
+  // ~~는 보존 (정상 취소선), 단일 ~만 &#126;로 변환
+  // 코드 펜스(```...```) 및 인라인 코드(`...`)는 건너뜀
+  function escapeGfmSingleTildes(src) {
+    // 코드 펜스, 인라인 코드, 그 외 텍스트를 순서대로 매칭
+    return src.replace(/(```[\s\S]*?```|`[^`\n]+`)|(?<![~])~(?![~])/g,
+      (match, codeBlock) => codeBlock ? codeBlock : '&#126;');
+  }
 
   // marked.js math extension: $...$ 및 $$...$$ 수식을 emphasis 토크나이저보다 먼저 인식
   // GFM이 underscore(_)를 em/strong으로 처리하기 전에 수식을 보호
@@ -219,6 +248,7 @@ const Renderer = (() => {
       clearTimeout(highlightTimers[key]);
       delete highlightTimers[key];
     }
+    lastRenderedHash = {};
   }
 
   /**
@@ -271,7 +301,7 @@ const Renderer = (() => {
     // 라인 번호 매핑을 포함한 마크다운 렌더링 (정확한 스크롤 동기화용)
     const source = cell.source || '';
     if (source.trim()) {
-      const tokens = marked.lexer(source);
+      const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
       content.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
@@ -492,7 +522,7 @@ const Renderer = (() => {
 
     const source = markupWrapper.dataset.source || '';
     if (source.trim()) {
-      const tokens = marked.lexer(source);
+      const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
       markupEl.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
@@ -511,8 +541,11 @@ const Renderer = (() => {
           throwOnError: false,
         });
       } catch (e) { /* ignore */ }
+      // 렌더링 완료 후 해시 기록 (stale 체크용)
+      lastRenderedHash[index] = simpleHash(source);
     } else {
       markupEl.innerHTML = '';
+      lastRenderedHash[index] = 0;
     }
   }
 
@@ -804,7 +837,7 @@ const Renderer = (() => {
       mdEl.className = 'cell-markup';
 
       // 라인 번호 매핑을 위해 토큰 단위로 렌더링
-      const tokens = marked.lexer(content || '');
+      const tokens = marked.lexer(escapeGfmSingleTildes(content || ''));
       const html = renderMarkdownWithLineNumbers(tokens, content || '');
       mdEl.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
@@ -1265,9 +1298,8 @@ const Renderer = (() => {
    * 커서 요소로 스크롤 (이미 보이면 스크롤 안함)
    */
   function scrollToCursorElement() {
-    const cursor = document.querySelector('.teacher-cursor');
-    const lineHighlight = document.querySelector('.teacher-line-highlight');
-    const targetEl = cursor || lineHighlight;
+    // cursorElement는 showCursorInElement에서 이미 캐시됨 — DOM 재탐색 불필요
+    const targetEl = cursorElement || document.querySelector('.teacher-line-highlight');
     if (!targetEl) return;
 
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
@@ -1338,6 +1370,8 @@ const Renderer = (() => {
       let line = 0;
       let col = 0;
       let node;
+      let lastNode = null;
+      let lastOffset = 0;
 
       while ((node = walker.nextNode())) {
         const text = node.textContent || '';
@@ -1352,6 +1386,14 @@ const Renderer = (() => {
             col++;
           }
         }
+        lastNode = node;
+        lastOffset = text.length;
+      }
+      // 텍스트 끝에 커서가 있는 경우 (마지막 줄 끝, 또는 cursor:position이
+      // cell:update보다 먼저 도착하여 텍스트보다 한 칸 앞선 경우)
+      // lastNode의 끝 위치에서 Range를 생성하여 정확한 좌표 반환
+      if (line === targetLine && col === targetChar && lastNode) {
+        return getRangeRect(codeEl, lastNode, lastOffset);
       }
     } catch (e) {
       // DOM 변경 중 walker 오류 — fallback 사용
@@ -1364,8 +1406,41 @@ const Renderer = (() => {
       const range = document.createRange();
       range.setStart(node, offset);
       range.collapse(true);
-      const rects = range.getClientRects();
-      if (rects.length === 0) return null;
+      let rects = range.getClientRects();
+
+      // hljs span 경계에서 collapsed range의 getClientRects()가 빈 배열을 반환할 수 있음.
+      // 이 경우 1-char range를 만들어 인접 문자의 좌표로 대체한다.
+      if (rects.length === 0) {
+        const textLen = node.textContent ? node.textContent.length : 0;
+        if (offset > 0) {
+          // 이전 문자를 포함하는 1-char range → right edge = 커서 위치
+          range.setStart(node, offset - 1);
+          range.setEnd(node, offset);
+          rects = range.getClientRects();
+          if (rects.length > 0) {
+            const codeRect = codeEl.getBoundingClientRect();
+            return {
+              left: rects[0].right - codeRect.left + codeEl.scrollLeft,
+              top: rects[0].top - codeRect.top + codeEl.scrollTop,
+            };
+          }
+        }
+        if (offset < textLen) {
+          // 다음 문자를 포함하는 1-char range → left edge = 커서 위치
+          range.setStart(node, offset);
+          range.setEnd(node, offset + 1);
+          rects = range.getClientRects();
+          if (rects.length > 0) {
+            const codeRect = codeEl.getBoundingClientRect();
+            return {
+              left: rects[0].left - codeRect.left + codeEl.scrollLeft,
+              top: rects[0].top - codeRect.top + codeEl.scrollTop,
+            };
+          }
+        }
+        return null;
+      }
+
       const codeRect = codeEl.getBoundingClientRect();
       return {
         left: rects[0].left - codeRect.left + codeEl.scrollLeft,
@@ -1399,7 +1474,16 @@ const Renderer = (() => {
       if (highlightTimers[key]) {
         clearTimeout(highlightTimers[key]);
         delete highlightTimers[key];
-        renderMarkupImmediate(currentCursorCellIndex);
+      }
+      // raw→rendered 전환 시 항상 최신 소스로 렌더링 보장
+      const cellEl = document.getElementById(`cell-${currentCursorCellIndex}`);
+      const wrapper = cellEl && cellEl.querySelector('.cell-markup-wrapper');
+      if (wrapper) {
+        const currentSource = wrapper.dataset.source || '';
+        const currentHash = simpleHash(currentSource);
+        if (lastRenderedHash[currentCursorCellIndex] !== currentHash) {
+          renderMarkupImmediate(currentCursorCellIndex);
+        }
       }
     }
 

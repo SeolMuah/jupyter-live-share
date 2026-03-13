@@ -2,13 +2,13 @@
 
 ## 제품 요약
 
-**제품명:** Jupyter Live Share (가칭)
+**제품명:** Jupyter Live Share
 
 **한 줄 요약:** VS Code에서 Jupyter Notebook(.ipynb), Python(.py), Markdown(.md), 텍스트(.txt) 등 파일을 실시간으로 학생들에게 공유하는 교육용 Extension
 
 **목표 사용자:** 통계/데이터 분석을 가르치는 교육자 및 50명 규모의 학생
 
-**기술적 타당성:** 구현 가능 (아래 타당성 분석 참조)
+**기술적 타당성:** 구현 가능
 
 ---
 

@@ -602,6 +602,11 @@ header {
   overflow-wrap: normal;
 }
 
+/* hljs 테마의 background가 마크다운 코드 블록에 침투하는 것을 방지 */
+.cell-markup pre code.hljs {
+  background: transparent;
+}
+
 /* Markdown Images — 셀 너비 내에서 제한 (코드 출력 이미지와 동일 정책) */
 .cell-markup img {
   max-width: 100%;
@@ -1600,10 +1605,10 @@ footer label {
   border-color: var(--accent);
 }
 
-/* === Drawing Tools Panel (Right Side Vertical) === */
+/* === Drawing Tools Panel (Right Side Vertical, Draggable) === */
 #draw-tools-panel {
   position: fixed;
-  right: 12px;
+  right: 2px;
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -1611,11 +1616,41 @@ footer label {
   align-items: center;
   gap: 4px;
   padding: 8px;
+  padding-top: 14px;
+  width: 52px; /* fixed width — immune to Teacher View resize */
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   z-index: 400;
   box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  user-select: none;
+}
+
+#draw-tools-panel .drag-handle {
+  width: 24px;
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 3px;
+  cursor: grab;
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+#draw-tools-panel .drag-handle:hover {
+  opacity: 1;
+}
+
+#draw-tools-panel .drag-handle:active {
+  cursor: grabbing;
+}
+
+#draw-tools-panel.dragging {
+  opacity: 0.85;
+  transition: none;
 }
 
 .dt-separator {
