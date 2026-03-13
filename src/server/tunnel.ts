@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import * as zlib from 'zlib';
 import { Logger } from '../utils/logger';
 
 // Bundled binaries included in the extension package
@@ -213,7 +214,19 @@ export class TunnelManager {
       fs.mkdirSync(this.binDir, { recursive: true });
     }
 
-    await this.downloadFile(downloadUrl, binPath);
+    if (downloadUrl.endsWith('.tgz')) {
+      // macOS: .tgz 압축 파일 → 임시 파일로 다운로드 후 해제
+      const tgzPath = binPath + '.tgz';
+      await this.downloadFile(downloadUrl, tgzPath);
+      await this.extractTgz(tgzPath, this.binDir);
+      if (fs.existsSync(tgzPath)) fs.unlinkSync(tgzPath);
+    } else {
+      await this.downloadFile(downloadUrl, binPath);
+    }
+
+    if (!fs.existsSync(binPath)) {
+      throw new Error(`Failed to extract cloudflared binary to ${binPath}`);
+    }
 
     // Linux/macOS: 실행 권한 부여
     if (platform !== 'win32') {
@@ -222,6 +235,44 @@ export class TunnelManager {
 
     Logger.info('cloudflared downloaded successfully');
     return binPath;
+  }
+
+  private extractTgz(tgzPath: string, destDir: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const input = fs.createReadStream(tgzPath);
+      const gunzip = zlib.createGunzip();
+      const chunks: Buffer[] = [];
+
+      input.pipe(gunzip);
+
+      gunzip.on('data', (chunk: Buffer) => chunks.push(chunk));
+      gunzip.on('end', () => {
+        // tar 형식 파싱: 512바이트 헤더 + 파일 데이터
+        const tar = Buffer.concat(chunks);
+        let offset = 0;
+        while (offset < tar.length) {
+          const header = tar.slice(offset, offset + 512);
+          if (header.every(b => b === 0)) break;
+
+          const fileName = header.slice(0, 100).toString('utf8').replace(/\0/g, '').trim();
+          const sizeOctal = header.slice(124, 136).toString('utf8').replace(/\0/g, '').trim();
+          const fileSize = parseInt(sizeOctal, 8) || 0;
+          offset += 512;
+
+          if (fileSize > 0 && fileName && !fileName.endsWith('/')) {
+            const baseName = path.basename(fileName);
+            const destPath = path.join(destDir, baseName);
+            fs.writeFileSync(destPath, tar.slice(offset, offset + fileSize));
+            Logger.info(`Extracted: ${baseName} (${fileSize} bytes)`);
+          }
+
+          offset += Math.ceil(fileSize / 512) * 512;
+        }
+        resolve();
+      });
+      gunzip.on('error', reject);
+      input.on('error', reject);
+    });
   }
 
   private downloadFile(url: string, dest: string): Promise<void> {
