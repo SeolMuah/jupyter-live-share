@@ -37,19 +37,7 @@
 
 ## 설치
 
-### VSIX 파일로 설치 (권장)
-
-```bash
-code --install-extension jupyter-live-share-2.2.5.vsix
-```
-
-또는 VS Code → Extensions → `...` → "Install from VSIX..." 에서 `.vsix` 파일 선택
-
-### 마켓플레이스에서 설치
-
-> 마켓플레이스 게시 후 사용 가능
-
-VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
+VS Code Extensions (`Ctrl+Shift+X`)에서 **Jupyter Live Share** 검색 후 설치
 
 ## 사용 방법
 
