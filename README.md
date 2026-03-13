@@ -145,6 +145,10 @@ VS Code Extensions에서 "Jupyter Live Share" 검색 후 설치
 | `.txt` | plaintext | 일반 텍스트 |
 | `.js`, `.ts` 등 | plaintext | 구문 하이라이팅 |
 
+## Cloudflare Tunnel 안내
+
+이 익스텐션은 외부 접속을 위해 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared`)을 사용합니다. 첫 세션 시작 시 Cloudflare의 공식 GitHub 릴리스에서 바이너리를 자동 다운로드하며, 이후에는 재다운로드 없이 사용됩니다.
+
 ## 라이선스
 
 MIT
