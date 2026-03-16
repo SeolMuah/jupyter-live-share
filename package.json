@@ -1,10 +1,26 @@
 {
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
-  "description": "Share Jupyter Notebooks in real-time with students via browser",
+  "description": "Real-time Jupyter Notebook & code file sharing for classrooms — broadcast .ipynb, .py, .md via browser and in-editor preview with drawing, polls, and chat",
   "version": "2.2.5",
   "publisher": "seolmuah",
   "license": "MIT",
+  "keywords": [
+    "jupyter",
+    "notebook",
+    "live share",
+    "real-time",
+    "classroom",
+    "teaching",
+    "education",
+    "broadcast",
+    "collaboration",
+    "drawing",
+    "poll",
+    "cloudflare tunnel",
+    "ipynb",
+    "preview"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/SeolMuah/jupyter-live-share"
