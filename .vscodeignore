@@ -17,8 +17,11 @@ bin/**
 draw*.png
 취소선.png
 # AI 도구/세션 아티팩트 (절대 배포 금지 — 세션 상태·프롬프트 포함 가능)
+# 루트뿐 아니라 dist/viewer 등 어느 깊이에 섞여도 제외되도록 **/ 패턴도 함께 지정
 .omc/**
+**/.omc/**
 .playwright-mcp/**
+**/.playwright-mcp/**
 # 확장과 무관한 사용자 데이터/스크래치
 starter_code/**
 image/**
