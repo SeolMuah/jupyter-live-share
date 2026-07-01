@@ -24,6 +24,11 @@
   let lastProgrammaticScrollTime = 0;
   const PROGRAMMATIC_SCROLL_SUPPRESS_MS = 250;
 
+  // 가로 스크롤 프록시 상태 — init()이 로드 직후 실행되며 toggleChat→updateHScrollProxy에서
+  // 즉시 참조하므로 반드시 상단에 선언(TDZ 방지). 아래 함수 정의부에서 사용.
+  let hScrollProxy = null;
+  let hScrollSyncing = false;
+
   // Chat/Poll state
   let myNickname = '';
   let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__;
@@ -532,8 +537,12 @@
     documentType = 'notebook';
     currentDocument = null;
     notebookCells = data.cells || [];
-    fileName.textContent = data.fileName || 'notebook.ipynb';
+    // 헤더: 프로젝트 루트 기준 상대경로 표시 (없으면 파일명 폴백)
+    const nbPath = data.filePath || data.fileName || 'notebook.ipynb';
+    fileName.textContent = nbPath;
+    fileName.title = nbPath;
     Renderer.renderNotebook(data, notebookContainer);
+    updateHScrollProxy(); // 노트북 모드에서는 프록시 숨김
 
     // 다운로드 버튼 텍스트 업데이트
     if (btnDownload) {
@@ -569,13 +578,75 @@
     documentType = 'plaintext';
     currentDocument = data;
     notebookCells = [];
-    fileName.textContent = data.fileName || 'untitled.txt';
+    // 헤더: 프로젝트 루트 기준 상대경로 표시 (없으면 파일명 폴백)
+    const docPath = data.filePath || data.fileName || 'untitled.txt';
+    fileName.textContent = docPath;
+    fileName.title = docPath;
     Renderer.renderPlaintextDocument(data, notebookContainer);
+    updateHScrollProxy();
 
     // 다운로드 버튼 텍스트 업데이트
     if (btnDownload) {
       btnDownload.textContent = 'Download';
       btnDownload.title = `Download ${data.fileName || 'file'}`;
+    }
+  }
+
+  // === 가로 스크롤 프록시 ===
+  // plaintext 코드가 가로로 넘칠 때, 세로 스크롤 위치와 무관하게 화면 하단에
+  // 항상 보이는(고정) 가로 스크롤바를 제공한다 (파일 맨 끝까지 안 내려가도 사용 가능).
+  // (상태 변수 hScrollProxy/hScrollSyncing는 파일 상단에 선언 — init()이 로드 직후 참조하므로 TDZ 방지)
+  function ensureHScrollProxy() {
+    if (hScrollProxy) return hScrollProxy;
+    hScrollProxy = document.createElement('div');
+    hScrollProxy.id = 'hscroll-proxy';
+    hScrollProxy.setAttribute('aria-hidden', 'true');
+    const inner = document.createElement('div');
+    inner.id = 'hscroll-proxy-inner';
+    hScrollProxy.appendChild(inner);
+    document.body.appendChild(hScrollProxy);
+    // 프록시 스크롤 → 코드 pre로 반영
+    hScrollProxy.addEventListener('scroll', () => {
+      if (hScrollSyncing) return;
+      const pre = document.querySelector('#document-content pre');
+      if (!pre) return;
+      hScrollSyncing = true;
+      pre.scrollLeft = hScrollProxy.scrollLeft;
+      hScrollSyncing = false;
+    }, { passive: true });
+    // 창 크기 변경 시 위치/크기 갱신
+    window.addEventListener('resize', () => updateHScrollProxy(), { passive: true });
+    return hScrollProxy;
+  }
+
+  function updateHScrollProxy() {
+    const proxy = ensureHScrollProxy();
+    // 마크다운 문서는 문서 전체 pre가 없고 코드블록만 개별 pre → 프록시 미적용(코드블록 자체 스크롤바 사용)
+    const isMarkdownDoc = currentDocument && currentDocument.languageId === 'markdown';
+    const pre = (documentType === 'plaintext' && !isMarkdownDoc)
+      ? document.querySelector('#document-content pre')
+      : null;
+    // plaintext가 아니거나 가로 넘침이 없으면 숨김
+    if (!pre || pre.scrollWidth <= pre.clientWidth + 1) {
+      proxy.style.display = 'none';
+      return;
+    }
+    const rect = pre.getBoundingClientRect();
+    proxy.style.left = Math.max(0, rect.left) + 'px';
+    proxy.style.width = rect.width + 'px';
+    hScrollProxy.firstChild.style.width = pre.scrollWidth + 'px';
+    proxy.style.display = 'block';
+    proxy.scrollLeft = pre.scrollLeft;
+
+    // 코드 pre 스크롤 → 프록시로 반영 (한 번만 바인딩)
+    if (!pre.__hscrollBound) {
+      pre.__hscrollBound = true;
+      pre.addEventListener('scroll', () => {
+        if (hScrollSyncing) return;
+        hScrollSyncing = true;
+        proxy.scrollLeft = pre.scrollLeft;
+        hScrollSyncing = false;
+      }, { passive: true });
     }
   }
 
@@ -585,6 +656,7 @@
       currentDocument.content = data.content;
     }
     Renderer.updateDocumentContent(data.content);
+    updateHScrollProxy(); // 내용 변경으로 코드 폭이 바뀔 수 있음
   }
 
   function handleCellsStructure(data) {
@@ -602,6 +674,7 @@
     WsClient.disconnect();
     Drawing.destroy();
     notebookContainer.innerHTML = '';
+    if (hScrollProxy) hScrollProxy.style.display = 'none'; // 세션 종료 시 가로 스크롤 프록시 명시적 숨김
     const endMsg = document.createElement('div');
     endMsg.className = 'session-ended';
     endMsg.textContent = 'Session has ended.';
@@ -776,6 +849,11 @@
 
     // Update draw tools position
     updateDrawToolsPosition();
+
+    // 채팅 열림/닫힘으로 코드 영역 폭이 바뀜 → 가로 스크롤 프록시 재정렬
+    // (레이아웃 트랜지션 0.25s 후에도 한 번 더 갱신)
+    updateHScrollProxy();
+    setTimeout(updateHScrollProxy, 280);
   }
 
   function updateChatBadge() {

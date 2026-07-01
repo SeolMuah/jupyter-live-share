@@ -96,6 +96,91 @@ html::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
+/* === 코드 가로 스크롤바 — 스크롤임을 명확히 보이도록 (얇지만 또렷, hover 시 강조) === */
+.document-content pre::-webkit-scrollbar,
+.cell-source::-webkit-scrollbar,
+.cell-source pre::-webkit-scrollbar,
+.cell-markup pre::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.document-content pre::-webkit-scrollbar-track,
+.cell-source::-webkit-scrollbar-track,
+.cell-source pre::-webkit-scrollbar-track,
+.cell-markup pre::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 5px;
+}
+.document-content pre::-webkit-scrollbar-thumb,
+.cell-source::-webkit-scrollbar-thumb,
+.cell-source pre::-webkit-scrollbar-thumb,
+.cell-markup pre::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 5px;
+}
+.document-content pre::-webkit-scrollbar-thumb:hover,
+.cell-source::-webkit-scrollbar-thumb:hover,
+.cell-source pre::-webkit-scrollbar-thumb:hover,
+.cell-markup pre::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+[data-theme="dark"] .document-content pre::-webkit-scrollbar-track,
+[data-theme="dark"] .cell-source::-webkit-scrollbar-track,
+[data-theme="dark"] .cell-source pre::-webkit-scrollbar-track,
+[data-theme="dark"] .cell-markup pre::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] .document-content pre::-webkit-scrollbar-thumb,
+[data-theme="dark"] .cell-source::-webkit-scrollbar-thumb,
+[data-theme="dark"] .cell-source pre::-webkit-scrollbar-thumb,
+[data-theme="dark"] .cell-markup pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* === 고정 가로 스크롤 프록시 ===
+   plaintext 코드가 가로로 넘칠 때, 세로 위치와 무관하게 화면 하단에 항상 보이는 가로 스크롤바.
+   코드 가림 최소화: 하단 툴바(footer) 바로 위 12px 얇은 띠 + footer와 같은 배경으로 "툴바의 연장"처럼 보이게. 넘칠 때만 표시. */
+#hscroll-proxy {
+  position: fixed;
+  bottom: var(--footer-height);
+  height: 12px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  z-index: 340; /* 콘텐츠·판서 위, footer(350) 아래 */
+  display: none;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.06);
+}
+#hscroll-proxy-inner {
+  height: 1px;
+}
+#hscroll-proxy::-webkit-scrollbar {
+  height: 12px;
+}
+#hscroll-proxy::-webkit-scrollbar-track {
+  background: transparent;
+}
+#hscroll-proxy::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 6px;
+  border: 3px solid var(--bg-secondary); /* 트랙 안에서 thumb를 얇게 보이도록 */
+  background-clip: padding-box;
+}
+#hscroll-proxy::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+}
+
+/* 헤더 파일 경로: 길면 말줄임 (tooltip으로 전체 경로 확인 가능) */
+#file-name {
+  display: inline-block;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--bg-primary);

@@ -17,14 +17,33 @@ export interface SerializedCell {
 
 export interface SerializedNotebook {
   fileName: string;
+  filePath: string;
   cells: SerializedCell[];
   activeCellIndex: number;
 }
 
 export interface SerializedTextDocument {
   fileName: string;
+  filePath: string;
   content: string;
   languageId: string;
+}
+
+/**
+ * 워크스페이스(프로젝트) 루트 기준 상대경로를 반환한다.
+ * 워크스페이스가 없거나 파일이 그 밖에 있으면 파일명만 반환한다.
+ */
+export function getRelativePath(uri: vscode.Uri): string {
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders && folders.length > 0) {
+    // includeWorkspaceFolder=false: 단일 루트에서는 폴더명 없이 상대경로만
+    const rel = vscode.workspace.asRelativePath(uri, false);
+    // asRelativePath는 워크스페이스 밖이면 원본(절대) 경로를 그대로 반환 → 파일명으로 폴백
+    if (rel && rel !== uri.fsPath && !rel.startsWith('/')) {
+      return rel.replace(/\\/g, '/'); // Windows 구분자 정규화
+    }
+  }
+  return uri.path.split('/').pop() || uri.fsPath;
 }
 
 const MAX_OUTPUT_SIZE = 5 * 1024 * 1024; // 5MB per cell
@@ -82,6 +101,7 @@ export function serializeNotebook(
 
   return {
     fileName: document.uri.path.split('/').pop() || 'notebook.ipynb',
+    filePath: getRelativePath(document.uri),
     cells,
     activeCellIndex,
   };
@@ -92,6 +112,7 @@ export function serializeTextDocument(
 ): SerializedTextDocument {
   return {
     fileName: document.uri.path.split('/').pop() || 'untitled.txt',
+    filePath: getRelativePath(document.uri),
     content: document.getText(),
     languageId: document.languageId,
   };
