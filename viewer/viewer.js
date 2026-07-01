@@ -16,7 +16,7 @@
   let documentType = 'notebook'; // 'notebook' | 'plaintext'
   let currentDocument = null;
 
-  // Scroll priority: cursor:position이 viewport:sync보다 우선
+  // Scroll priority: cursor:position이 scroll:sync보다 우선
   let lastCursorScrollTime = 0;
   const CURSOR_SCROLL_PRIORITY_MS = 300;
 
@@ -113,8 +113,10 @@
       nameInput.value = savedName;
     }
 
-    // Connect WebSocket (teacher preview joins as teacherPanel to avoid viewerCount increment)
-    const joinData = isTeacherPreview ? { teacherPanel: true } : undefined;
+    // Connect WebSocket (teacher preview joins as teacherPanel to avoid viewerCount increment).
+    // teacherToken proves this is the trusted Teacher Preview webview, not a remote student
+    // (source IP alone is unreliable once traffic passes through the Cloudflare tunnel).
+    const joinData = isTeacherPreview ? { teacherPanel: true, teacherToken: window.__TEACHER_TOKEN__ } : undefined;
     WsClient.connect(handleMessage, handleStatus, null, joinData);
 
     // Event listeners
@@ -441,10 +443,6 @@
         }
         break;
 
-      case 'viewport:sync':
-        handleViewportSync(msg.data);
-        break;
-
       case 'scroll:sync':
         handleScrollSync(msg.data);
         break;
@@ -685,26 +683,6 @@
     chatMessages.innerHTML = '';
     if (pollBanner) pollBanner.style.display = 'none';
     currentPollId = null;
-  }
-
-  // === Viewport Sync (plaintext 전용 — 노트북은 cursor:position이 스크롤 담당) ===
-
-  function handleViewportSync(data) {
-    // Teacher preview: skip (teacher controls their own scroll)
-    if (isTeacherPreview) return;
-    if (data.mode === 'plaintext' && documentType === 'plaintext') {
-      // 마크다운 문서는 viewport:sync 무시 — cursor:position으로만 스크롤
-      // (마크다운은 렌더된 HTML과 소스 라인이 1:1 대응이 안 되어 viewport 라인 기반 스크롤이 부정확)
-      if (currentDocument && currentDocument.languageId === 'markdown') return;
-
-      // 커서 스크롤이 최근에 발생했으면 viewport 스크롤 무시 (커서 우선)
-      if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
-
-      const autoScroll = document.getElementById('auto-scroll');
-      if (autoScroll && autoScroll.checked && typeof data.firstVisibleLine === 'number') {
-        Renderer.scrollToLine(data.firstVisibleLine);
-      }
-    }
   }
 
   // === Scroll Sync (선생님→학생 스크롤 동기화) ===

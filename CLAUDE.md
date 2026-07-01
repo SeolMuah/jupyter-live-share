@@ -81,14 +81,14 @@ npm run compile
 # F5로 Extension Development Host 실행
 
 # 서버 직접 테스트 (개발 중)
-# 브라우저에서 http://localhost:3000 접속
+# 브라우저에서 http://localhost:48632 접속
 # 브라우저 DevTools Console에서 WebSocket 메시지 확인
 ```
 
 #### WebSocket 수동 테스트 (브라우저 Console)
 ```javascript
 // 연결 테스트
-const ws = new WebSocket('ws://localhost:3000');
+const ws = new WebSocket('ws://localhost:48632');
 ws.onmessage = (e) => console.log('수신:', JSON.parse(e.data));
 ws.onopen = () => console.log('연결 성공');
 ws.onclose = () => console.log('연결 끊김');
@@ -97,13 +97,13 @@ ws.onclose = () => console.log('연결 끊김');
 #### 부하 테스트
 ```bash
 # 50명 동시 접속 시뮬레이션
-node test/load/load-test.js --url ws://localhost:3000 --clients 50
+node test/load/load-test.js --url ws://localhost:48632 --clients 50
 ```
 
 #### Cloudflare Tunnel 테스트
 ```bash
 # 수동으로 터널 테스트
-cloudflared tunnel --url http://localhost:3000
+cloudflared tunnel --url http://localhost:48632
 # 출력되는 https://xxx.trycloudflare.com URL로 외부 접속 확인
 ```
 

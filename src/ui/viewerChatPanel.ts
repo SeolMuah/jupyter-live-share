@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 
 /**
  * VS Code 하단 패널 (터미널 영역)에 표시되는 Viewer Chat WebviewView.
@@ -114,7 +115,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws: wss: http: https:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws: wss:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     /* === Reset & Base === */
@@ -745,10 +746,5 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
 }
 
 function getNonce(): string {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('hex');
 }

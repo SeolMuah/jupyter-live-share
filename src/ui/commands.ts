@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { startHttpServer, stopHttpServer, getServer } from '../server/httpServer';
-import { startWsServer, stopWsServer, setSessionPin, setOnViewerCountChange, setTeacherName } from '../server/wsServer';
+import * as crypto from 'crypto';
+import { startHttpServer, stopHttpServer } from '../server/httpServer';
+import { startWsServer, stopWsServer, setSessionPin, setOnViewerCountChange, setTeacherName, setTeacherToken, getTeacherToken } from '../server/wsServer';
 import { TunnelManager } from '../server/tunnel';
 import { startWatching, stopWatching, setImageShareEnabled } from '../notebook/watcher';
 import { StatusBarManager } from './statusBar';
@@ -11,10 +12,6 @@ import { Logger } from '../utils/logger';
 
 let tunnel: TunnelManager | null = null;
 let isRunning = false;
-
-export function getIsRunning(): boolean {
-  return isRunning;
-}
 
 /**
  * 터널을 동기적으로 강제 종료한다 (프로세스 exit 핸들러용)
@@ -48,8 +45,9 @@ export async function startSession(
   const config = getConfig();
 
   try {
-    // PIN 없이 바로 시작
+    // PIN 없이 바로 시작 (뷰잉은 URL로 오픈, 교사 권한만 토큰으로 게이트)
     const pin: string | null = null;
+    const teacherToken = crypto.randomBytes(24).toString('hex');
 
     // 1. HTTP 서버 시작
     await vscode.window.withProgress(
@@ -62,6 +60,7 @@ export async function startSession(
         progress.report({ message: 'Starting WebSocket...' });
         if (pin) setSessionPin(pin);
         if (teacherNameParam) setTeacherName(teacherNameParam);
+        setTeacherToken(teacherToken);
         startWsServer(httpServer, config.maxViewers);
 
         // 접속자 수 변경 콜백
@@ -114,6 +113,7 @@ export async function startSession(
           url: tunnelUrl,
           port: config.port,
           pin: pin || undefined,
+          teacherToken,
           viewerCount: 0,
           fileName,
           tunnelStatus,
@@ -182,7 +182,7 @@ export async function createPoll(sidebarView?: SessionViewProvider) {
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Teacher-Token': getTeacherToken() || '' },
       body: postData,
       signal: controller.signal,
     });
@@ -216,7 +216,7 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Teacher-Token': getTeacherToken() || '' },
       signal: controller.signal,
     });
 
@@ -261,6 +261,7 @@ async function cleanupSession(
     port: undefined,
     tunnelStatus: undefined,
     pin: undefined,
+    teacherToken: undefined,
     viewerCount: 0,
     fileName: undefined,
     pollActive: false,

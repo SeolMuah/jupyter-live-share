@@ -2,22 +2,15 @@ import express from 'express';
 import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { execSync } from 'child_process';
 import { Logger } from '../utils/logger';
 import { getWatchMode, getCurrentFileUri, getCurrentFileName, getCurrentContent } from '../notebook/watcher';
-import { startPoll, endPoll } from './wsServer';
+import { startPoll, endPoll, getTeacherToken } from './wsServer';
 
 let server: http.Server | null = null;
 let app: express.Express | null = null;
 const activeConnections = new Set<net.Socket>();
-
-export function getApp(): express.Express | null {
-  return app;
-}
-
-export function getServer(): http.Server | null {
-  return server;
-}
 
 /**
  * 포트를 점유 중인 프로세스를 강제 종료한다 (이전 비정상 종료 복구용)
@@ -75,6 +68,16 @@ export function startHttpServer(port: number): Promise<http.Server> {
   return new Promise((resolve, reject) => {
     app = express();
 
+    // 보안 응답 헤더 (모든 응답에 적용) — CSP는 index.html <meta>에서 관리하므로 여기서 설정하지 않는다
+    app.use((_req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      next();
+    });
+
     // 정적 파일 서빙 (브라우저 뷰어) — 캐시 완전 비활성화
     // 학생 브라우저가 구버전 JS/CSS를 캐시하면 실시간 동기화 버그 발생
     const viewerPath = path.join(__dirname, 'viewer');
@@ -100,12 +103,28 @@ export function startHttpServer(port: number): Promise<http.Server> {
       }
     };
 
+    // 교사 토큰 검증 미들웨어 — /api/poll/* 는 requireLocalhost만으로는 안전하지 않다
+    // (Cloudflare 터널을 거치면 원격 학생의 요청도 remoteAddress가 127.0.0.1로 보임).
+    // constant-time 비교로 토큰을 검증해 실제 교사(확장 프로세스)만 호출을 허용한다.
+    const requireTeacherToken: express.RequestHandler = (req, res, next) => {
+      const token = getTeacherToken();
+      const provided = req.header('x-teacher-token');
+      if (!token || typeof provided !== 'string' || !provided) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      const a = Buffer.from(provided);
+      const b = Buffer.from(token);
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      next();
+    };
+
     // Health check
     app.get('/health', (_req, res) => {
-      res.json({
-        status: 'ok',
-        uptime: process.uptime(),
-      });
+      res.json({ status: 'ok' });
     });
 
     // 파일 다운로드 (메모리 기반 - 저장하지 않은 수정사항도 포함)
@@ -132,7 +151,7 @@ export function startHttpServer(port: number): Promise<http.Server> {
     });
 
     // Poll API (VS Code에서 사용)
-    app.post('/api/poll/start', requireLocalhost, (req, res) => {
+    app.post('/api/poll/start', requireLocalhost, requireTeacherToken, (req, res) => {
       const { question, optionCount, options } = req.body;
       const q = typeof question === 'string' ? question.trim() : '';
       const count = Math.min(Math.max(Number(optionCount) || 2, 2), 10);
@@ -144,7 +163,7 @@ export function startHttpServer(port: number): Promise<http.Server> {
       res.json({ success: true, pollId });
     });
 
-    app.post('/api/poll/end', requireLocalhost, (_req, res) => {
+    app.post('/api/poll/end', requireLocalhost, requireTeacherToken, (_req, res) => {
       const result = endPoll();
       if (!result) {
         res.status(404).json({ error: 'No active poll' });

@@ -2,7 +2,7 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Real-time Jupyter Notebook & code file sharing for classrooms — broadcast .ipynb, .py, .md via browser and in-editor preview with drawing, polls, and chat",
-  "version": "2.2.8",
+  "version": "2.2.9",
   "publisher": "seolmuah",
   "license": "MIT",
   "keywords": [
@@ -144,6 +144,7 @@
     "compile": "webpack --mode development",
     "watch": "webpack --mode development --watch",
     "build": "webpack --mode production",
+    "vscode:prepublish": "npm run build",
     "lint": "eslint src --ext ts",
     "package": "vsce package"
   },
@@ -165,8 +166,8 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "express": "^4.22.2",
     "sharp": "^0.34.5",
-    "ws": "^8.16.0"
+    "ws": "^8.21.0"
   }
 }

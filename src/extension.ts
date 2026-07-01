@@ -114,6 +114,19 @@ export function activate(context: vscode.ExtensionContext) {
       TeacherPreviewPanel.createOrShow(context)
     )
   );
+
+  // StatusBar 클릭 시 URL 복사 (사이드바와 동일한 URL 상태를 재사용)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jupyterLiveShare.copyUrl', async () => {
+      const url = sessionViewProvider?.getCurrentUrl();
+      if (!url) {
+        vscode.window.showWarningMessage('No active Jupyter Live Share session.');
+        return;
+      }
+      await vscode.env.clipboard.writeText(url);
+      vscode.window.showInformationMessage(`URL copied to clipboard: ${url}`);
+    })
+  );
 }
 
 export function deactivate() {

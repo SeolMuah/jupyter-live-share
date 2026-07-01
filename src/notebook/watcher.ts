@@ -6,11 +6,19 @@ import { Logger } from '../utils/logger';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
-const CELL_DEBOUNCE_MS = 50; // 빠른 글자 동기화 (150→50)
 const TEXT_DEBOUNCE_MS = 100;
 const THROTTLE_MS = 100; // 셀 포커스 추적 반응성 개선 (200→100)
 const CURSOR_THROTTLE_MS = 30; // Cursor updates need fastest response (50→30)
 const VIEWPORT_THROTTLE_MS = 100; // Viewport sync needs fast but not excessive updates
+// Trailing-edge debounce per cell for cell:update (keystroke coalescing). A burst of
+// keystrokes within this window collapses to a single broadcast carrying the LATEST
+// source — the flush always re-reads the live cell document at fire time, so no
+// intermediate OR final keystroke is ever lost, only the intermediate broadcasts are
+// coalesced. Cell-switch/blur/stop paths flush any pending timer immediately.
+const CELL_UPDATE_DEBOUNCE_MS = 40;
+
+// 타이핑/커서 등 초당 다회 발생하는 이벤트의 상세 로그는 기본적으로 끈다 (필요 시 true로 전환)
+const SYNC_DEBUG = false;
 
 // languageIds where image resolution is relevant
 const IMAGE_RELEVANT_LANGUAGES = new Set(['markdown', 'html', 'jupyter']);
@@ -22,6 +30,7 @@ let lastFocusTime = 0;
 let lastCursorTime = 0;
 let cursorTrailingTimer: NodeJS.Timeout | null = null;
 let viewportTrailingTimer: NodeJS.Timeout | null = null;
+let syncBackupTimer: NodeJS.Timeout | null = null;
 let lastViewportTime = 0;
 let lastActiveCellIndex = -1;
 let lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
@@ -29,6 +38,17 @@ let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
 let imageShareEnabled = true;
+
+// Cache of the fully serialized + image-resolved notebook payload, reused for every
+// joining viewer instead of re-running serializeNotebook/resolveNotebookImages per join.
+// MUST be invalidated on ANY notebook content change (cell text/outputs/structure) and on
+// notebook switch, so a joining student can never receive stale content. activeCellIndex
+// is overwritten per-join (see setupNewViewerHandler) since it's cheap and per-viewer.
+let cachedNotebookFull: SerializedNotebook | null = null;
+
+function invalidateNotebookFullCache(): void {
+  cachedNotebookFull = null;
+}
 
 export function setImageShareEnabled(enabled: boolean) {
   imageShareEnabled = enabled;
@@ -157,6 +177,32 @@ function broadcastViewportScroll(data: unknown) {
 }
 
 /**
+ * Flush a single cell's pending debounced cell:update immediately, sending the
+ * LATEST live source (re-read from the notebook at call time, not whatever was
+ * captured when the timer was scheduled). Safe to call redundantly — it always
+ * clears/deletes the timer entry first. Used by the debounce trailing edge, the
+ * cell-switch flush, and stopWatching's final flush so no keystroke is ever lost.
+ */
+function flushCellUpdate(cellIndex: number) {
+  const timer = debounceTimers.get(cellIndex);
+  if (timer) clearTimeout(timer);
+  debounceTimers.delete(cellIndex);
+
+  if (!currentNotebook) return;
+  if (cellIndex < 0 || cellIndex >= currentNotebook.cellCount) return;
+
+  const cell = currentNotebook.cellAt(cellIndex);
+  const text = cell.document.getText();
+  lastSentSources.set(cellIndex, text);
+  const isMarkup = cell.kind === vscode.NotebookCellKind.Markup;
+  const resolvedText = (imageShareEnabled && isMarkup)
+    ? resolveLocalImagesCacheOnly(text, getBaseDir())
+    : text;
+  if (SYNC_DEBUG) Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${resolvedText.length} (debounce flush)`);
+  broadcast('cell:update', { index: cellIndex, source: resolvedText });
+}
+
+/**
  * Clear all pending timers and reset state on file switch.
  * Prevents stale events (cursor, cell updates) from the previous file
  * from leaking into the new file context.
@@ -174,6 +220,7 @@ function flushAndResetState() {
     clearTimeout(timer);
   }
   debounceTimers.clear();
+  invalidateNotebookFullCache();
   if (textDebounceTimer) {
     clearTimeout(textDebounceTimer);
     textDebounceTimer = null;
@@ -205,6 +252,9 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
   const serialized = serializeNotebook(notebook, activeCellIndex);
   resolveNotebookImages(serialized, baseDir);
   broadcast('notebook:full', serialized);
+  // Seed the join cache with the payload we just built (activeCellIndex gets overwritten
+  // per-join anyway) so the next viewer to join doesn't pay for a redundant rebuild.
+  cachedNotebookFull = serialized;
 
   // 파일 전환 시 판서 및 스크롤 위치 초기화
   clearDrawStrokes();
@@ -296,9 +346,17 @@ function setupNewViewerHandler() {
     if (watchMode === 'notebook' && currentNotebook) {
       const editor = vscode.window.activeNotebookEditor;
       const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;
-      const serialized = serializeNotebook(currentNotebook, activeCellIndex);
-      resolveNotebookImages(serialized, getBaseDir());
-      sendTo(ws, 'notebook:full', serialized);
+
+      // H4: reuse the cached serialized+image-resolved payload across joins instead of
+      // re-running serializeNotebook/resolveNotebookImages for every viewer. The cache is
+      // invalidated on ANY notebook change (see invalidateNotebookFullCache callers), so a
+      // cache hit here is always current content. activeCellIndex is per-viewer and cheap,
+      // so it's overwritten on a shallow copy — the cached object itself is never mutated.
+      if (!cachedNotebookFull) {
+        cachedNotebookFull = serializeNotebook(currentNotebook, activeCellIndex);
+        resolveNotebookImages(cachedNotebookFull, getBaseDir());
+      }
+      sendTo(ws, 'notebook:full', { ...cachedNotebookFull, activeCellIndex });
       // 노트북 스크롤 위치는 아래 getLastScrollSync() 재생으로 새 접속자에게 전달됨
     } else if (watchMode === 'plaintext' && currentTextDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
@@ -418,27 +476,26 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       if (!currentNotebook) return;
       if (event.notebook.uri.toString() !== currentNotebook.uri.toString()) return;
 
+      // 어떤 변경이든(셀 내용/출력/구조) 즉시 캐시 무효화 — 다음 join은 항상 최신 상태를 받는다.
+      // (cell:update 자체는 debounce 될 수 있지만, 캐시는 여기서 즉시 비우고 다음 접속 시
+      // serializeNotebook이 그 시점의 live 텍스트를 다시 읽으므로 debounce 타이밍과 무관하게 최신이다)
+      invalidateNotebookFullCache();
+
       // 셀 내용 변경 (타이핑)
       for (const change of event.cellChanges) {
         if (change.document) {
           const cellIndex = change.cell.index;
-          // change.cell.document (live reference) 사용 — change.document가 snapshot일 수 있음
-          const newSource = change.cell.document.getText();
 
-          // ★ 핵심: cell:update를 즉시 전송 (debounce 없음)
-          // 이 핸들러가 소스 동기화의 유일한 메커니즘이다.
+          // ★ 짧은 trailing debounce로 키 입력 버스트를 하나로 합친다 (H3).
+          // flushCellUpdate가 fire 시점에 change.cell.document가 아니라 currentNotebook에서
+          // 셀을 다시 조회해 항상 "그 순간의 최신 소스"를 읽으므로, 몇 번을 눌러도 마지막
+          // 키 입력이 유실되지 않는다. 셀 전환/블러/정지 경로가 모두 이 타이머를 즉시 flush한다.
           const existing = debounceTimers.get(cellIndex);
           if (existing) clearTimeout(existing);
-          debounceTimers.delete(cellIndex);
-
-          Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${newSource.length} first20="${newSource.substring(0, 20)}"`);
-          lastSentSources.set(cellIndex, newSource);
-          // Resolve images in markup cells (cache-only for real-time typing)
-          const isMarkup = change.cell.kind === vscode.NotebookCellKind.Markup;
-          const resolvedSource = (imageShareEnabled && isMarkup)
-            ? resolveLocalImagesCacheOnly(newSource, getBaseDir())
-            : newSource;
-          broadcast('cell:update', { index: cellIndex, source: resolvedSource });
+          const timer = setTimeout(() => {
+            flushCellUpdate(cellIndex);
+          }, CELL_UPDATE_DEBOUNCE_MS);
+          debounceTimers.set(cellIndex, timer);
         }
 
         if (change.outputs) {
@@ -461,8 +518,16 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
             outputs,
             executionOrder: change.cell.executionSummary?.executionOrder,
           });
-          Logger.info(`Cell ${cellIndex} output updated`);
+          if (SYNC_DEBUG) Logger.info(`Cell ${cellIndex} output updated`);
         }
+      }
+
+      // 구조 변경(셀 추가/삭제)이 있는 이벤트면, 인덱스 기반 대기 디바운스를 취소한다.
+      // 인덱스가 밀린 뒤 flush되면 다른 셀의 내용을 잘못된 index로 보낼 수 있기 때문.
+      // (안전 우선: 잘못된 내용 전송을 막는다. 취소된 마지막 편집분은 다음 편집/백업으로 보정됨.)
+      if (event.contentChanges.length > 0 && debounceTimers.size > 0) {
+        for (const timer of debounceTimers.values()) clearTimeout(timer);
+        debounceTimers.clear();
       }
 
       // 셀 구조 변경 (추가/삭제)
@@ -479,9 +544,11 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
         // 셀 구조 변경 시 판서 초기화
         clearDrawStrokes();
         broadcast('draw:clear', {});
-        Logger.info(
-          `Cells structure changed: ${change.addedCells.length} added, ${change.removedCells.length} removed`
-        );
+        if (SYNC_DEBUG) {
+          Logger.info(
+            `Cells structure changed: ${change.addedCells.length} added, ${change.removedCells.length} removed`
+          );
+        }
       }
     })
   );
@@ -495,22 +562,9 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
 
         // 셀 전환 시: 이전 셀의 pending cell:update를 즉시 flush (마지막 글자 누락 방지)
         if (activeCellIndex !== lastActiveCellIndex) {
-          for (const [idx, timer] of debounceTimers.entries()) {
+          for (const idx of [...debounceTimers.keys()]) {
             if (idx !== activeCellIndex) {
-              clearTimeout(timer);
-              // Bounds check: 셀이 삭제된 경우 cellAt() 예외 방지
-              if (idx >= 0 && idx < currentNotebook.cellCount) {
-                const pendingCell = currentNotebook.cellAt(idx);
-                const pendingText = pendingCell.document.getText();
-                lastSentSources.set(idx, pendingText);
-                // Resolve images in markup cells during flush
-                const isMarkup = pendingCell.kind === vscode.NotebookCellKind.Markup;
-                const resolvedText = (imageShareEnabled && isMarkup)
-                  ? resolveLocalImagesCacheOnly(pendingText, getBaseDir())
-                  : pendingText;
-                broadcast('cell:update', { index: idx, source: resolvedText });
-              }
-              debounceTimers.delete(idx);
+              flushCellUpdate(idx);
             }
           }
           lastActiveCellIndex = activeCellIndex;
@@ -595,7 +649,9 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       // - 50ms 지연: setTimeout(0)은 document 업데이트 전에 실행될 수 있음
       // - lastSent ?? '': 미등록 셀을 빈 문자열로 처리하여 false positive 방지
       const capturedCellIndex = cellIndex;
-      setTimeout(() => {
+      if (syncBackupTimer) clearTimeout(syncBackupTimer);
+      syncBackupTimer = setTimeout(() => {
+        syncBackupTimer = null;
         if (!currentNotebook) return;
         if (capturedCellIndex < 0 || capturedCellIndex >= currentNotebook.cellCount) return;
         const cell = currentNotebook.cellAt(capturedCellIndex);
@@ -603,7 +659,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
         const lastSent = lastSentSources.get(capturedCellIndex) ?? '';
         if (currentText !== lastSent) {
           lastSentSources.set(capturedCellIndex, currentText);
-          Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
+          if (SYNC_DEBUG) Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
           // Resolve images in markup cells (cache-only for real-time)
           const isMarkupCell = cell.kind === vscode.NotebookCellKind.Markup;
           const resolvedText = (imageShareEnabled && isMarkupCell)
@@ -916,17 +972,13 @@ export function stopWatching() {
   }
   disposables = [];
 
-  for (const [idx, timer] of debounceTimers.entries()) {
-    clearTimeout(timer);
-    // Flush: send final cell state before stopping (prevent last character loss)
-    if (currentNotebook && idx >= 0 && idx < currentNotebook.cellCount) {
-      const cell = currentNotebook.cellAt(idx);
-      const text = cell.document.getText();
-      lastSentSources.set(idx, text);
-      broadcast('cell:update', { index: idx, source: text });
-    }
+  // Flush: send final cell state for every pending debounce before stopping
+  // (prevent last-keystroke loss).
+  for (const idx of [...debounceTimers.keys()]) {
+    flushCellUpdate(idx);
   }
   debounceTimers.clear();
+  invalidateNotebookFullCache();
 
   if (cursorTrailingTimer) {
     clearTimeout(cursorTrailingTimer);
@@ -941,6 +993,11 @@ export function stopWatching() {
   if (textDebounceTimer) {
     clearTimeout(textDebounceTimer);
     textDebounceTimer = null;
+  }
+
+  if (syncBackupTimer) {
+    clearTimeout(syncBackupTimer);
+    syncBackupTimer = null;
   }
 
   lastSentSources.clear();

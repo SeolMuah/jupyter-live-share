@@ -81,6 +81,9 @@ export function serializeOutputs(
             data = '<div style="color:orange;">Output too large to display (>5MB). Run locally to view.</div>';
           } else if (mime === 'text/plain') {
             data = data.substring(0, 10000) + '\n\n... [truncated: output exceeds 5MB] ...';
+          } else if (mime.startsWith('image/')) {
+            // 대용량 이미지: base64 원본을 전송하지 않고 안내 텍스트로 대체
+            return { mime: 'text/plain', data: '[image too large to display (>5MB). Run locally to view.]' };
           }
         }
 

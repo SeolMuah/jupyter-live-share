@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as crypto from 'crypto';
 import WebSocket from 'ws';
 import { Logger } from '../utils/logger';
 
@@ -14,6 +15,7 @@ interface ClientMeta {
   nickname: string | null;
   lastMessageTimes: number[];
   countedAsViewer: boolean; // Track if this client has been counted in viewerCount
+  countedAsChatOnly: boolean; // Track if this client has been counted in chatOnlyCount
 }
 
 interface PollState {
@@ -37,12 +39,38 @@ export interface PollStateReadonly {
 
 let wss: WebSocket.Server | null = null;
 let viewerCount = 0;
+let chatOnlyCount = 0;
 let onViewerCountChange: ((count: number) => void) | null = null;
 let sessionPin: string | null = null;
 let teacherName: string = 'Teacher';
+let teacherToken: string | null = null;
 let clientMeta: Map<WebSocket, ClientMeta> = new Map();
 let currentPoll: PollState | null = null;
 let chatMessageId = 0;
+
+// WS frame size ceiling — must exceed the largest legitimate payload
+// (notebook:full / cell:output with base64 images, capped at MAX_OUTPUT_SIZE=5MB per cell in serializer.ts)
+// while still bounding frame size against abuse.
+const WS_MAX_PAYLOAD = 16 * 1024 * 1024; // 16MB
+
+// Backpressure protection (선생님 VS Code 프로세스 메모리 보호):
+// - HARD limit 초과 = 클라이언트가 전송을 전혀 따라잡지 못함 → 소켓 terminate. 뷰어는 자동
+//   재접속해 notebook:full/document:full로 최신 상태를 통째로 다시 받으므로 정합성 보장.
+//   (메시지를 선택적으로 드롭하지 않는 이유: cell:output 같은 1회성 이벤트나 편집 버스트의
+//    마지막 cell:update를 드롭하면 그 학생만 영구 stale 됨.)
+// - SOFT limit 초과 시에는 "손실돼도 무해한 순간 UI 힌트"(커서/스크롤)만 건너뛴다. 이들은
+//   문서 상태가 아니라 일시적 위치 정보라 한두 개 빠져도 다음 것으로 즉시 갱신된다.
+const WS_SOFT_LIMIT = 2 * 1024 * 1024;  // 2MB
+const WS_HARD_LIMIT = 16 * 1024 * 1024; // 16MB (단일 메시지 최대치 WS_MAX_PAYLOAD 수준)
+
+// 손실돼도 무해한 순간성(ephemeral) 메시지 — SOFT limit에서만 스킵 가능.
+const EPHEMERAL_TYPES = new Set([
+  'cursor:position',
+  'scroll:sync',
+]);
+
+let heartbeatInterval: NodeJS.Timeout | null = null;
+const HEARTBEAT_INTERVAL_MS = 30000;
 
 interface DrawStroke {
   strokeId: string;
@@ -72,6 +100,14 @@ export function setTeacherName(name: string) {
   teacherName = name || 'Teacher';
 }
 
+export function setTeacherToken(token: string | null) {
+  teacherToken = token;
+}
+
+export function getTeacherToken(): string | null {
+  return teacherToken;
+}
+
 export function setOnViewerCountChange(callback: (count: number) => void) {
   onViewerCountChange = callback;
 }
@@ -93,9 +129,15 @@ export function getCurrentPollState(): PollStateReadonly | null {
   };
 }
 
-function isLocalAddress(address: string | undefined): boolean {
-  if (!address) return false;
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+// Cloudflare 터널을 거치면 원격 학생의 접속도 서버 입장에서는 127.0.0.1로 보인다.
+// 따라서 소스 IP는 더 이상 신뢰할 수 없는 신호이며, 교사 권한은 반드시
+// 세션 시작 시 발급된 비밀 토큰(constant-time 비교)으로만 부여한다.
+function isValidTeacherToken(candidate: unknown): boolean {
+  if (!teacherToken || typeof candidate !== 'string' || !candidate) return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(teacherToken);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 function isValidDrawStroke(data: unknown): data is DrawStroke {
@@ -166,32 +208,45 @@ export function startWsServer(
   httpServer: http.Server,
   maxViewers: number
 ): WebSocket.Server {
-  wss = new WebSocket.Server({ server: httpServer });
+  // permessage-deflate는 백프레셔(bufferedAmount)와 상호작용해 지속 버스트 시 전 클라이언트
+  // 전송이 교착되는 문제가 부하테스트에서 확인되어 비활성화한다. (대역폭 절감보다 안정성 우선)
+  wss = new WebSocket.Server({
+    server: httpServer,
+    maxPayload: WS_MAX_PAYLOAD,
+  });
 
-  wss.on('connection', (ws, req) => {
-    const remoteAddress = req.socket.remoteAddress;
-    const isTeacher = isLocalAddress(remoteAddress);
-
+  wss.on('connection', (ws) => {
+    // isTeacher는 더 이상 소스 IP로 부여하지 않는다 (터널을 거치면 모든 원격 학생이
+    // 127.0.0.1로 보이는 문제). join 메시지에서 유효한 teacherToken을 제시한 경우에만 true가 된다.
     const meta: ClientMeta = {
       authenticated: !sessionPin,
-      isTeacher,
+      isTeacher: false,
       isTeacherPanel: false,
-      nickname: isTeacher ? teacherName : null,
+      nickname: null,
       lastMessageTimes: [],
       countedAsViewer: false,
+      countedAsChatOnly: false,
     };
     clientMeta.set(ws, meta);
+
+    // Heartbeat liveness flag — reset to true on connect and on every pong.
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    ws.on('pong', () => {
+      (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    });
 
     ws.on('message', (raw) => {
       try {
         const msg: WsMessage = JSON.parse(raw.toString());
 
         if (msg.type === 'join') {
-          const joinData = msg.data as { pin?: string; teacherPanel?: boolean; chatOnly?: boolean };
+          const joinData = msg.data as { pin?: string; teacherPanel?: boolean; chatOnly?: boolean; teacherToken?: string };
 
-          // Teacher Panel connection (sidebar WebSocket)
-          if (joinData.teacherPanel && meta.isTeacher) {
+          // Teacher Panel connection (sidebar WebSocket / Teacher Preview webview)
+          // 오직 유효한 teacherToken을 제시한 경우에만 교사 권한을 부여한다.
+          if (joinData.teacherPanel && isValidTeacherToken(joinData.teacherToken)) {
             meta.authenticated = true;
+            meta.isTeacher = true;
             meta.isTeacherPanel = true;
             meta.nickname = teacherName;
             sendTo(ws, 'join:result', { success: true });
@@ -226,9 +281,17 @@ export function startWsServer(
               ws.close(4001, 'Invalid PIN');
               return;
             }
+            // chatOnly는 학생 연결 — isTeacher는 기본값 false 그대로 유지
+            // viewerCount에는 포함되지 않지만, maxViewers 우회를 막기 위해
+            // 별도 카운터(chatOnlyCount)로 정원을 함께 검사한다.
+            if (viewerCount + chatOnlyCount >= maxViewers) {
+              sendTo(ws, 'join:result', { success: false, error: 'Session is full' });
+              ws.close(4002, 'Session full');
+              return;
+            }
             meta.authenticated = true;
-            // chatOnly는 학생 연결 — localhost여도 isTeacher=false
-            meta.isTeacher = false;
+            meta.countedAsChatOnly = true;
+            chatOnlyCount++;
             // NOT counted as viewer
             sendTo(ws, 'join:result', { success: true });
             // Send current poll state if active
@@ -269,7 +332,7 @@ export function startWsServer(
           meta.authenticated = true;
           meta.countedAsViewer = true;
           viewerCount++;
-          Logger.info(`Viewer connected (total: ${viewerCount}, isTeacher: ${isTeacher})`);
+          Logger.info(`Viewer connected (total: ${viewerCount}, isTeacher: ${meta.isTeacher})`);
 
           sendTo(ws, 'join:result', { success: true });
           broadcast('viewers:count', { count: viewerCount });
@@ -441,12 +504,45 @@ export function startWsServer(
         broadcast('viewers:count', { count: viewerCount });
         onViewerCountChange?.(viewerCount);
       }
+      if (meta.countedAsChatOnly) {
+        meta.countedAsChatOnly = false; // Prevent double decrement
+        chatOnlyCount = Math.max(0, chatOnlyCount - 1);
+      }
+      // 주의: currentPoll.voterChoices는 여기서 정리하지 않는다.
+      // totalVoters(voterChoices.size)와 votes[] 합계의 일관성을 위해 endPoll에서 일괄 정리한다.
+      // (연결 종료 시 삭제하면 votes[]는 그대로인데 totalVoters만 줄어 백분율이 100%를 초과할 수 있음)
       clientMeta.delete(ws);
     });
 
     ws.on('error', (err) => {
       Logger.error('WebSocket client error', err);
     });
+  });
+
+  // Heartbeat: reap dead/ghost connections (e.g. tunnel-side sockets that never sent a
+  // close frame) so viewerCount stays honest and the client list doesn't grow unbounded.
+  // ws.terminate() below fires the client's 'close' handler, which already decrements
+  // viewerCount/chatOnlyCount correctly — no separate cleanup needed here.
+  // 이전 세션의 인터벌이 남아있으면 정리 (start/stop 반복 시 인터벌 누수 방지)
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  heartbeatInterval = setInterval(() => {
+    if (!wss) return;
+    wss.clients.forEach((client) => {
+      const withAlive = client as WebSocket & { isAlive?: boolean };
+      if (withAlive.isAlive === false) {
+        client.terminate();
+        return;
+      }
+      withAlive.isAlive = false;
+      client.ping();
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  wss.on('close', () => {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
   });
 
   Logger.info('WebSocket server started');
@@ -471,9 +567,13 @@ export function broadcast(type: string, data: unknown) {
   const message = JSON.stringify({ type, data });
 
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
+    if (client.readyState !== WebSocket.OPEN) return;
+    const buffered = client.bufferedAmount;
+    // 따라잡지 못하는 클라이언트는 종료 → 재접속 시 full-sync로 최신화 (내용 유실 없음).
+    if (buffered > WS_HARD_LIMIT) { client.terminate(); return; }
+    // SOFT limit 초과 시 순간성 힌트(커서/스크롤)만 스킵 (문서 상태 메시지는 항상 전송).
+    if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
+    client.send(message);
   });
 }
 
@@ -483,9 +583,11 @@ function broadcastExclude(exclude: WebSocket, type: string, data: unknown) {
   const message = JSON.stringify({ type, data });
 
   wss.clients.forEach((client) => {
-    if (client !== exclude && client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
+    if (client === exclude || client.readyState !== WebSocket.OPEN) return;
+    const buffered = client.bufferedAmount;
+    if (buffered > WS_HARD_LIMIT) { client.terminate(); return; }
+    if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
+    client.send(message);
   });
 }
 
@@ -498,8 +600,10 @@ export function sendTo(ws: WebSocket, type: string, data: unknown) {
 export function stopWsServer(): Promise<void> {
   return new Promise((resolve) => {
     viewerCount = 0;
+    chatOnlyCount = 0;
     sessionPin = null;
     teacherName = 'Teacher';
+    teacherToken = null;
     clientMeta.clear();
     currentPoll = null;
     chatMessageId = 0;
@@ -535,8 +639,10 @@ export function stopWsServer(): Promise<void> {
 
 export function forceStopWsServer(): void {
   viewerCount = 0;
+  chatOnlyCount = 0;
   sessionPin = null;
   teacherName = 'Teacher';
+  teacherToken = null;
   clientMeta.clear();
   currentPoll = null;
   chatMessageId = 0;

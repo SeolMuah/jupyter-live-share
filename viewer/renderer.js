@@ -700,65 +700,6 @@ const Renderer = (() => {
   }
 
   /**
-   * Scroll to a specific line number in plaintext document
-   * Uses data-line attributes for markdown, line height calculation for code
-   */
-  function scrollToLine(lineNumber) {
-    const contentEl = document.getElementById('document-content');
-    if (!contentEl) return;
-
-    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-    const margin = 60;
-    const markupEl = contentEl.querySelector('.cell-markup');
-
-    if (markupEl) {
-      const elementsWithLine = markupEl.querySelectorAll('[data-line]');
-      let targetEl = null;
-      let closestLine = -1;
-
-      for (const el of elementsWithLine) {
-        const elLine = parseInt(el.getAttribute('data-line'), 10);
-        if (elLine <= lineNumber && elLine > closestLine) {
-          closestLine = elLine;
-          targetEl = el;
-        }
-      }
-
-      if (targetEl) {
-        const rect = targetEl.getBoundingClientRect();
-        // 이미 뷰포트 안에 보이면 스크롤 불필요
-        if (rect.top >= headerHeight + margin && rect.bottom <= window.innerHeight - margin) {
-          return;
-        }
-        const absoluteTop = rect.top + window.scrollY;
-        window.scrollTo({
-          top: Math.max(0, absoluteTop - headerHeight - (window.innerHeight / 3)),
-          behavior: 'auto'
-        });
-        return;
-      }
-    }
-
-    const codeEl = contentEl.querySelector('pre code');
-    if (codeEl) {
-      const lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 24;
-      const codeTop = codeEl.getBoundingClientRect().top + window.scrollY;
-      const targetAbsoluteTop = codeTop + (lineNumber * lineHeight);
-
-      // 이미 뷰포트 안에 보이면 스크롤 불필요
-      const targetViewportTop = targetAbsoluteTop - window.scrollY;
-      if (targetViewportTop >= headerHeight + margin && targetViewportTop <= window.innerHeight - margin) {
-        return;
-      }
-
-      window.scrollTo({
-        top: Math.max(0, targetAbsoluteTop - headerHeight - (window.innerHeight / 3)),
-        behavior: 'auto'
-      });
-    }
-  }
-
-  /**
    * Scroll to a specific ratio (0-1) of the document
    * Works better for rendered content like markdown
    */
@@ -1721,7 +1662,6 @@ const Renderer = (() => {
     showTeacherCursor,
     showDocumentCursor,
     removeDocumentCursor,
-    scrollToLine,
     scrollToRatio,
     scrollToDocumentAnchor,
     scrollNotebookToCell,

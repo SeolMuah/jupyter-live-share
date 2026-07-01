@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 
 interface SessionState {
   isRunning: boolean;
   url?: string;
   port?: number;
   pin?: string;
+  teacherToken?: string;
   viewerCount: number;
   fileName?: string;
   pollActive?: boolean;
@@ -94,6 +96,11 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
   refresh() {
     this._sendState();
+  }
+
+  /** 상태 표시줄 등 외부에서 현재 공유 URL을 재사용할 수 있도록 노출 */
+  getCurrentUrl(): string | undefined {
+    return this._state.url;
   }
 
   resetBadge() {
@@ -779,7 +786,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       });
 
       // WebSocket management
-      function connectWs(port) {
+      function connectWs(port, teacherToken) {
         if (ws) {
           ws.close();
           ws = null;
@@ -790,7 +797,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
           ws.onopen = () => {
             ws.send(JSON.stringify({
               type: 'join',
-              data: { teacherPanel: true }
+              data: { teacherPanel: true, teacherToken: teacherToken }
             }));
             addSystemMessage('Connected to session');
           };
@@ -1054,7 +1061,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
             // Connect WebSocket if port available and not already connected
             if (state.port && (!ws || ws.readyState === WebSocket.CLOSED)) {
-              connectWs(state.port);
+              connectWs(state.port, state.teacherToken);
             }
 
             // Poll state from extension
@@ -1086,10 +1093,5 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 }
 
 function getNonce(): string {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('hex');
 }
