@@ -13,6 +13,7 @@ webpack.config.js
 token.txt
 CLAUDE.md
 *.vsix
+*.vsix.zip
 bin/**
 draw*.png
 취소선.png
