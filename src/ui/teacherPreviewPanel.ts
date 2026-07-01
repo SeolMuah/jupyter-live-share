@@ -82,6 +82,7 @@ export class TeacherPreviewPanel {
     font-src https://cdnjs.cloudflare.com;
     img-src ${webview.cspSource} data: https:;
     connect-src ws: wss: https: http:;
+    worker-src 'self' blob:;
   ">
   <title>Teacher Preview</title>
   <link rel="stylesheet" href="${styleUri}">
@@ -107,6 +108,8 @@ export class TeacherPreviewPanel {
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
   <!-- DOMPurify -->
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+  <!-- Mermaid - 다이어그램 렌더링 -->
+  <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
   <!-- Flags: VS Code Webview + Teacher Preview + WS URL -->
   <script nonce="${nonce}">
     window.__VSCODE_WEBVIEW__ = true;

@@ -7,7 +7,7 @@ A VS Code extension that lets teachers share files (.ipynb, .py, .txt, .md, etc.
 ## Key Features
 
 - **Real-time Jupyter Notebook Sharing** (`.ipynb`): Cell edits, execution outputs, and cell add/delete are synced instantly
-- **Text File Sharing** (`.py`, `.txt`, `.md`, etc.): Syntax highlighting and Markdown rendering support
+- **Text File Sharing** (`.py`, `.txt`, `.md`, etc.): Syntax highlighting, Markdown rendering, and Mermaid diagram rendering (```mermaid code blocks display as diagrams)
 - **Live Cursor Tracking**: Teacher's cursor position, line highlight, and text selection are displayed on students' screens in real-time
 - **Live Chat**: Teachers chat from the VS Code sidebar, students from the browser or VS Code Viewer Chat panel (with spam rate limiting)
 - **Teacher Message Highlighting**: Teacher messages are displayed with a green background for easy identification

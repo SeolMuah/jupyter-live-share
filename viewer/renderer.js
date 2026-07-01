@@ -8,6 +8,58 @@ const Renderer = (() => {
   let layoutChangeCallback = null;
   let lastRenderedHash = {};
 
+  // Mermaid 다이어그램 렌더링 상태
+  let mermaidReady = false;
+  let mermaidCounter = 0;
+
+  /** mermaid.initialize()를 필요 시 1회(또는 테마 변경 시) 수행 */
+  function ensureMermaid() {
+    if (mermaidReady || !window.mermaid) return mermaidReady;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    try {
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+      mermaidReady = true;
+    } catch (e) { console.warn('mermaid init failed', e); }
+    return mermaidReady;
+  }
+
+  /** 컨테이너 내 ```mermaid 코드 블록을 찾아 SVG 다이어그램으로 교체 */
+  async function renderMermaidBlocks(containerEl) {
+    if (!containerEl || !window.mermaid) return;
+    if (!ensureMermaid()) return;
+    const blocks = containerEl.querySelectorAll('pre > code.language-mermaid');
+    for (const codeEl of blocks) {
+      const pre = codeEl.parentElement;
+      const src = codeEl.textContent || '';
+      const id = 'mmd-' + (mermaidCounter++);
+      const holder = document.createElement('div');
+      holder.className = 'mermaid-diagram';
+      holder.setAttribute('data-mermaid-src', src);   // theme 재렌더용 원본 보관
+      try {
+        const { svg } = await window.mermaid.render(id, src);
+        holder.innerHTML = svg;
+        // 스크롤 동기화 앵커 보존: 원래 코드블록의 data-line을 다이어그램으로 이전
+        const dl = pre.getAttribute('data-line');
+        if (dl != null) holder.setAttribute('data-line', dl);
+        pre.replaceWith(holder);
+      } catch (e) {
+        console.warn('mermaid render failed', e);
+        // 실패 시 원본 코드 유지 (holder 사용 안 함)
+      }
+    }
+  }
+
+  /** 테마 변경 시 기존 다이어그램들을 원본 소스에서 재렌더링 */
+  async function reRenderMermaid() {
+    mermaidReady = false; ensureMermaid();
+    const holders = document.querySelectorAll('.mermaid-diagram[data-mermaid-src]');
+    for (const holder of holders) {
+      const src = holder.getAttribute('data-mermaid-src') || '';
+      const id = 'mmd-' + (mermaidCounter++);
+      try { const { svg } = await window.mermaid.render(id, src); holder.innerHTML = svg; } catch (e) { /* keep */ }
+    }
+  }
+
   function simpleHash(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -310,8 +362,10 @@ const Renderer = (() => {
 
     // highlight.js로 코드 블록 하이라이팅
     content.querySelectorAll('pre code').forEach((block) => {
+      if (block.classList.contains('language-mermaid')) return; // mermaid는 다이어그램으로 렌더
       hljs.highlightElement(block);
     });
+    renderMermaidBlocks(content);   // async, fire-and-forget
 
     // KaTeX로 수식 렌더링
     try {
@@ -528,8 +582,10 @@ const Renderer = (() => {
         ADD_ATTR: ['data-line', 'class', 'style'],
       });
       markupEl.querySelectorAll('pre code').forEach((block) => {
+        if (block.classList.contains('language-mermaid')) return; // mermaid는 다이어그램으로 렌더
         hljs.highlightElement(block);
       });
+      renderMermaidBlocks(markupEl);   // async, fire-and-forget
       try {
         renderMathInElement(markupEl, {
           delimiters: [
@@ -889,8 +945,10 @@ const Renderer = (() => {
 
       // 코드 블록 하이라이팅
       mdEl.querySelectorAll('pre code').forEach((block) => {
+        if (block.classList.contains('language-mermaid')) return; // mermaid는 다이어그램으로 렌더
         hljs.highlightElement(block);
       });
+      renderMermaidBlocks(mdEl);   // async, fire-and-forget
 
       // KaTeX 수식 렌더링
       try {
@@ -1668,6 +1726,8 @@ const Renderer = (() => {
     scrollToDocumentAnchor,
     scrollNotebookToCell,
     scrollToNotebookAnchor,
+    renderMermaidBlocks,
+    reRenderMermaid,
     /** Register callback for when cursor removal changes cell layout (markup restore) */
     onLayoutChange(cb) { layoutChangeCallback = cb; },
   };

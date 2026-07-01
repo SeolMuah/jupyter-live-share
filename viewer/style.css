@@ -607,6 +607,28 @@ header {
   background: transparent;
 }
 
+/* Markdown Blockquotes — 뷰어 자체 테마 변수로 명시 스타일링.
+   (미지정 시 VS Code Webview에서 에디터 다크 테마 기본값이 침투해 라이트 모드에서도 검게 보임) */
+.cell-markup blockquote,
+.document-content blockquote {
+  margin: 0.6em 0;
+  padding: 0.4em 1em;
+  border-left: 4px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-radius: 0 4px 4px 0;
+}
+
+.cell-markup blockquote > :first-child,
+.document-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+.cell-markup blockquote > :last-child,
+.document-content blockquote > :last-child {
+  margin-bottom: 0;
+}
+
 /* Markdown Images — 셀 너비 내에서 제한 (코드 출력 이미지와 동일 정책) */
 .cell-markup img {
   max-width: 100%;
@@ -614,6 +636,18 @@ header {
   display: block;
   margin: 0.5em 0;
   border-radius: 4px;
+}
+
+/* Mermaid 다이어그램 — ```mermaid 코드 블록을 대체하는 SVG 컨테이너 */
+.mermaid-diagram {
+  margin: 0.8em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
 }
 
 /* Markdown Tables */

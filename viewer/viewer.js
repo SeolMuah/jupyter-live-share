@@ -1079,6 +1079,9 @@
       lightCss.disabled = theme === 'dark';
       darkCss.disabled = theme === 'light';
     }
+
+    // Mermaid 다이어그램도 테마에 맞게 재렌더링
+    if (window.Renderer && Renderer.reRenderMermaid) Renderer.reRenderMermaid();
   }
 
   // === Download ===

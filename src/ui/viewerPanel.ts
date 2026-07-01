@@ -134,6 +134,7 @@ export class ViewerPanel {
     font-src https://cdnjs.cloudflare.com;
     img-src ${webview.cspSource} data: https:;
     connect-src ws: wss: https: http:;
+    worker-src 'self' blob:;
   ">
   <title>Live Share Viewer</title>
   <link rel="stylesheet" href="${styleUri}">
@@ -159,6 +160,8 @@ export class ViewerPanel {
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
   <!-- DOMPurify -->
   <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+  <!-- Mermaid - 다이어그램 렌더링 -->
+  <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
   <!-- VS Code Webview flag + WebSocket URL 주입 -->
   <script nonce="${nonce}">
     window.__VSCODE_WEBVIEW__ = true;
