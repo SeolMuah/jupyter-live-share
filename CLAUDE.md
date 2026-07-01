@@ -143,6 +143,24 @@ git tag -a vX.X.X -m "vX.X.X: 변경 요약"
 git push origin main --tags
 ```
 
+#### 마켓플레이스 배포 (2곳 모두 필수)
+
+배포 시 **VS Code Marketplace**와 **Open VSX** 양쪽에 모두 올려야 한다.
+- VS Code Marketplace: VS Code 사용자 대상
+- Open VSX (`https://open-vsx.org/extension/seolmuah/jupyter-live-share`): VSCodium, Gitpod, Theia 등 기타 IDE 사용자 대상
+
+```bash
+# 1. VS Code Marketplace 배포
+npx vsce publish
+
+# 2. Open VSX 배포 (반드시 함께 수행)
+OVSX_TOKEN=$(sed -n '1p' token.txt)
+npx ovsx publish jupyter-live-share-X.X.X.vsix -p "$OVSX_TOKEN"
+```
+
+- Open VSX namespace `seolmuah`은 이미 생성되어 있음
+- Open VSX 토큰은 `token.txt` 1번째 줄에 저장
+
 #### GitHub Release 생성 (curl + API)
 
 `gh` CLI가 없으므로 `token.txt`의 GitHub PAT로 GitHub API를 직접 호출한다.

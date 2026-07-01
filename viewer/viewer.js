@@ -20,6 +20,10 @@
   let lastCursorScrollTime = 0;
   const CURSOR_SCROLL_PRIORITY_MS = 300;
 
+  // 프리뷰가 에디터를 따라 프로그램적으로 스크롤한 직후, 그 스크롤이 scroll:sync로 재전송(에코)되지 않도록 억제
+  let lastProgrammaticScrollTime = 0;
+  const PROGRAMMATIC_SCROLL_SUPPRESS_MS = 250;
+
   // Chat/Poll state
   let myNickname = '';
   let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__;
@@ -230,6 +234,9 @@
 
       let lastScrollEventTime = 0;
       const onScroll = () => {
+        // 에디터 추종으로 인한 프로그램적 스크롤이면 학생에게 재전송하지 않음 (에코 방지)
+        if (performance.now() - lastProgrammaticScrollTime < PROGRAMMATIC_SCROLL_SUPPRESS_MS) return;
+
         // window/document 이중 발화 방지 (같은 frame 내 중복 무시)
         const now = performance.now();
         if (now - lastScrollEventTime < 5) return;
@@ -287,11 +294,47 @@
       return { type: 'notebook', cellIndex: anchorIndex, offsetRatio };
     }
 
-    // Plaintext: 비율 기반
+    // Plaintext: 첫 번째 가시 소스 라인을 앵커로 사용 (화면 크기 독립적)
+    // 하위 호환을 위해 scrollRatio도 함께 포함
+    const clamp01 = (x) => Math.min(1, Math.max(0, x));
     const scrollY = getScrollY();
     const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-    if (maxScroll <= 0) return null;
-    return { type: 'plaintext', scrollRatio: scrollY / maxScroll };
+    const scrollRatio = maxScroll > 0 ? scrollY / maxScroll : 0;
+
+    const contentEl = document.getElementById('document-content');
+    if (!contentEl) return maxScroll > 0 ? { type: 'plaintext', scrollRatio } : null;
+
+    // Markdown plaintext: [data-line] 속성 기반 앵커
+    const markupEl = contentEl.querySelector('.cell-markup');
+    if (markupEl) {
+      const lineEls = markupEl.querySelectorAll('[data-line]');
+      for (const el of lineEls) {
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom > headerHeight) {
+          const line = parseInt(el.getAttribute('data-line'), 10);
+          const offsetRatio = clamp01((headerHeight - rect.top) / (rect.height || 1));
+          return { type: 'plaintext', line, offsetRatio, scrollRatio };
+        }
+      }
+      // 앵커 요소를 찾지 못한 경우 비율 fallback
+      return { type: 'plaintext', scrollRatio };
+    }
+
+    // 코드 plaintext: 균일 라인 높이 기반 앵커 (white-space:pre, no-wrap)
+    const code = contentEl.querySelector('pre code');
+    if (code) {
+      const lineHeight = parseFloat(getComputedStyle(code).lineHeight) || 24;
+      const codeTop = code.getBoundingClientRect().top;
+      // 문서 최상단(scrollY≈0)에서는 코드 상단이 sticky 헤더 아래에 있어
+      // firstVisible가 음수가 될 수 있음 → line/offsetRatio가 어긋나지 않도록 0으로 클램프
+      const firstVisible = Math.max(0, (headerHeight - codeTop) / lineHeight);
+      const line = Math.floor(firstVisible);
+      const offsetRatio = firstVisible - line;
+      return { type: 'plaintext', line, offsetRatio, scrollRatio };
+    }
+
+    // 콘텐츠 요소가 없는 경우
+    return maxScroll > 0 ? { type: 'plaintext', scrollRatio } : null;
   }
 
   // === Name Flow ===
@@ -370,12 +413,15 @@
         if (documentType === 'notebook') {
           // focus:cell fires on deliberate cell click — all viewers (including teacher preview) should follow
           Renderer.setActiveCell(msg.data.cellIndex);
+          lastCursorScrollTime = Date.now();  // 셀 클릭 직후 휠 스크롤 동기화보다 우선
         }
         break;
 
       case 'cursor:position':
         // All viewers (including teacher preview) display cursor identically.
-        // Teacher preview auto-scroll fight is prevented by viewport:sync / scroll:sync guards only.
+        // Teacher preview auto-scroll fight is prevented by:
+        //   1) scroll:sync: 프리뷰는 source:'editor' 태그된 에디터 스크롤만 따라감 (자신의 에코 무시)
+        //   2) cursor-priority guard: 커서 클릭 직후 300ms 동안 scroll:sync 무시 (클릭↔스크롤 충돌 방지)
         // Mode-aware: plaintext cursor has mode:'plaintext', notebook cursor has no mode field
         if (msg.data.mode === 'plaintext') {
           if (documentType === 'plaintext') {
@@ -591,8 +637,8 @@
   // === Scroll Sync (선생님→학생 스크롤 동기화) ===
 
   function handleScrollSync(data) {
-    // 선생님 프리뷰는 수신 무시 (자신이 발신자)
-    if (isTeacherPreview) return;
+    // Teacher Preview: 실제 에디터 스크롤(source:'editor')은 따라가되, 자신이 보낸 에코(source 없음)는 무시
+    if (isTeacherPreview && data.source !== 'editor') return;
 
     // Auto-scroll 체크
     const autoScroll = document.getElementById('auto-scroll');
@@ -601,10 +647,18 @@
     // 커서 스크롤 우선 (300ms 이내 cursor:position이 있었으면 무시)
     if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
 
+    // 프리뷰가 에디터를 따라 스크롤하기 직전 타임스탬프 기록 → 위 onScroll 재전송 억제
+    if (isTeacherPreview) lastProgrammaticScrollTime = performance.now();
+
     if (data.type === 'notebook' && documentType === 'notebook') {
       Renderer.scrollToNotebookAnchor(data.cellIndex, data.offsetRatio);
     } else if (data.type === 'plaintext' && documentType === 'plaintext') {
-      Renderer.scrollToRatio(data.scrollRatio);
+      // 새 라인 앵커 방식 우선, 없으면 비율 fallback
+      if (typeof data.line === 'number') {
+        Renderer.scrollToDocumentAnchor(data.line, typeof data.offsetRatio === 'number' ? data.offsetRatio : 0);
+      } else {
+        Renderer.scrollToRatio(data.scrollRatio);
+      }
     }
   }
 

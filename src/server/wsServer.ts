@@ -418,7 +418,8 @@ export function startWsServer(
           if (d.type === 'notebook') {
             if (typeof d.cellIndex !== 'number' || typeof d.offsetRatio !== 'number') return;
           } else if (d.type === 'plaintext') {
-            if (typeof d.scrollRatio !== 'number') return;
+            // 새 라인 앵커 또는 기존 비율 중 하나라도 있으면 유효
+            if (typeof d.line !== 'number' && typeof d.scrollRatio !== 'number') return;
           } else {
             return;
           }
@@ -456,6 +457,7 @@ export function getDrawStrokes(): DrawStroke[] { return [...drawStrokes]; }
 export function clearDrawStrokes(): void { drawStrokes = []; }
 export function getLastScrollSync(): unknown { return lastScrollSync; }
 export function clearLastScrollSync(): void { lastScrollSync = null; }
+export function setLastScrollSync(data: unknown): void { lastScrollSync = data; }
 
 let onNewViewer: ((ws: WebSocket) => void) | null = null;
 

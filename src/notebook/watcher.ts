@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync } from '../server/wsServer';
+import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync, setLastScrollSync } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot } from '../utils/imageResolver';
@@ -21,6 +21,7 @@ let textDebounceTimer: NodeJS.Timeout | null = null;
 let lastFocusTime = 0;
 let lastCursorTime = 0;
 let cursorTrailingTimer: NodeJS.Timeout | null = null;
+let viewportTrailingTimer: NodeJS.Timeout | null = null;
 let lastViewportTime = 0;
 let lastActiveCellIndex = -1;
 let lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
@@ -140,6 +141,22 @@ function collectNotebookRawText(notebook: vscode.NotebookDocument): string {
 }
 
 /**
+ * 에디터 스크롤 변경을 학생에게 throttle 적용하여 브로드캐스트.
+ * cursorTrailingTimer 패턴과 동일한 leading+trailing 방식 사용.
+ */
+function broadcastViewportScroll(data: unknown) {
+  const now = Date.now();
+  const since = now - lastViewportTime;
+  const send = () => { lastViewportTime = Date.now(); setLastScrollSync(data); broadcast('scroll:sync', data); };
+  if (since < VIEWPORT_THROTTLE_MS) {
+    if (viewportTrailingTimer) clearTimeout(viewportTrailingTimer);
+    viewportTrailingTimer = setTimeout(() => { viewportTrailingTimer = null; send(); }, VIEWPORT_THROTTLE_MS - since);
+    return;
+  }
+  send();
+}
+
+/**
  * Clear all pending timers and reset state on file switch.
  * Prevents stale events (cursor, cell updates) from the previous file
  * from leaking into the new file context.
@@ -148,6 +165,10 @@ function flushAndResetState() {
   if (cursorTrailingTimer) {
     clearTimeout(cursorTrailingTimer);
     cursorTrailingTimer = null;
+  }
+  if (viewportTrailingTimer) {
+    clearTimeout(viewportTrailingTimer);
+    viewportTrailingTimer = null;
   }
   for (const timer of debounceTimers.values()) {
     clearTimeout(timer);
@@ -160,6 +181,7 @@ function flushAndResetState() {
   // Reset throttle timestamps → first event for new file passes immediately
   lastFocusTime = 0;
   lastCursorTime = 0;
+  lastViewportTime = 0;
   lastActiveCellIndex = -1;
   lastSentSources.clear();
 }
@@ -277,14 +299,14 @@ function setupNewViewerHandler() {
       const serialized = serializeNotebook(currentNotebook, activeCellIndex);
       resolveNotebookImages(serialized, getBaseDir());
       sendTo(ws, 'notebook:full', serialized);
-      // 노트북 모드: viewport:sync 전송하지 않음 (cursor:position이 스크롤 담당)
+      // 노트북 스크롤 위치는 아래 getLastScrollSync() 재생으로 새 접속자에게 전달됨
     } else if (watchMode === 'plaintext' && currentTextDocument) {
       const serialized = serializeTextDocument(currentTextDocument);
       if (isImageRelevantTextDocument()) {
         serialized.content = resolveTextImagesFull(serialized.content, getBaseDir());
       }
       sendTo(ws, 'document:full', serialized);
-      // plaintext 모드: viewport:sync 전송하지 않음 (커서 클릭/드래그만 동기화)
+      // plaintext 스크롤 위치는 아래 getLastScrollSync() 재생으로 새 접속자에게 전달됨
     }
 
     // 활성 설문이 있으면 새 접속자에게 전송
@@ -508,8 +530,19 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
     })
   );
 
-  // 노트북 모드: viewport:sync 제거 — cursor:position이 학생 뷰 스크롤을 전담
-  // 선생님 스크롤이 학생 화면에 영향을 주지 않음
+  // 노트북 에디터 뷰포트(스크롤) 변경 감지 — 선생님 스크롤을 학생에게 셀 단위 앵커로 동기화
+  disposables.push(
+    vscode.window.onDidChangeNotebookEditorVisibleRanges((event) => {
+      if (!currentNotebook) return;
+      if (event.notebookEditor.notebook.uri.toString() !== currentNotebook.uri.toString()) return;
+      const ranges = event.visibleRanges;
+      if (!ranges || ranges.length === 0) return;
+      const firstVisibleCell = ranges[0].start; // NotebookRange.start = 첫 번째 보이는 셀 인덱스
+      // offsetRatio=0: VS Code Notebook API는 셀 단위 정보만 제공(셀 내부 픽셀 오프셋 없음) → 셀 단위 추종
+      // source:'editor' — 실제 에디터 스크롤임을 표시 (프리뷰가 자신의 에코와 구별하기 위해 사용)
+      broadcastViewportScroll({ type: 'notebook', cellIndex: firstVisibleCell, offsetRatio: 0, source: 'editor' });
+    })
+  );
 
   // 텍스트 에디터 커서 위치 감지 (셀 내부 커서)
   disposables.push(
@@ -681,11 +714,17 @@ function setupTextDocumentWatcher() {
   (textWatcher as any).__textDocWatcher = true;
   disposables.push(textWatcher);
 
-  // 텍스트 에디터 뷰포트(스크롤) 변경 감지 — 비활성화
-  // 선생님 스크롤은 학생에게 동기화하지 않음 (커서 클릭/드래그만 동기화)
-  const viewportWatcher = vscode.window.onDidChangeTextEditorVisibleRanges(() => {
-    // plaintext 모드에서는 viewport:sync를 보내지 않음
-    // cursor:position 이벤트가 클릭/드래그 시 학생 스크롤을 담당
+  // 텍스트 에디터 뷰포트(스크롤) 변경 감지 — 선생님 스크롤을 학생에게 line 앵커로 동기화
+  const viewportWatcher = vscode.window.onDidChangeTextEditorVisibleRanges((event) => {
+    if (!currentTextDocument) return;
+    if (event.textEditor.document.uri.toString() !== currentTextDocument.uri.toString()) return;
+    if (event.textEditor.document.uri.scheme === 'vscode-notebook-cell') return;
+    const ranges = event.visibleRanges;
+    if (!ranges || ranges.length === 0) return;
+    const firstVisibleLine = ranges[0].start.line;
+    // offsetRatio=0: 에디터 뷰포트는 줄 단위 추종(첫 보이는 줄을 학생 화면 상단에 정렬)
+    // source:'editor' — 실제 에디터 스크롤임을 표시 (프리뷰가 자신의 에코와 구별하기 위해 사용)
+    broadcastViewportScroll({ type: 'plaintext', line: firstVisibleLine, offsetRatio: 0, source: 'editor' });
   });
 
   (viewportWatcher as any).__textDocWatcher = true;
@@ -892,6 +931,11 @@ export function stopWatching() {
   if (cursorTrailingTimer) {
     clearTimeout(cursorTrailingTimer);
     cursorTrailingTimer = null;
+  }
+
+  if (viewportTrailingTimer) {
+    clearTimeout(viewportTrailingTimer);
+    viewportTrailingTimer = null;
   }
 
   if (textDebounceTimer) {

@@ -725,6 +725,50 @@ const Renderer = (() => {
   }
 
   /**
+   * 소스 라인 앵커로 plaintext 문서 스크롤 (화면 크기 독립적)
+   * line: 첫 번째 가시 소스 라인 번호, offsetRatio: 라인 내 오프셋 비율
+   */
+  function scrollToDocumentAnchor(line, offsetRatio) {
+    if (typeof line !== 'number' || isNaN(line)) return;
+    const contentEl = document.getElementById('document-content');
+    if (!contentEl) return;
+    const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+    const MARGIN = 8;
+    const off = (typeof offsetRatio === 'number' && !isNaN(offsetRatio))
+      ? Math.min(1, Math.max(0, offsetRatio)) : 0;
+
+    // Markdown plaintext: [data-line] 속성으로 가장 가까운 요소 찾기
+    const markupEl = contentEl.querySelector('.cell-markup');
+    if (markupEl) {
+      const els = markupEl.querySelectorAll('[data-line]');
+      let targetEl = null, closest = -1;
+      for (const el of els) {
+        const l = parseInt(el.getAttribute('data-line'), 10);
+        if (l <= line && l > closest) { closest = l; targetEl = el; }
+      }
+      if (!targetEl && els.length) targetEl = els[0];
+      if (!targetEl) return;
+      const rect = targetEl.getBoundingClientRect();
+      const targetAbs = rect.top + getScrollY() + off * (rect.height || 0);
+      const dest = Math.max(0, targetAbs - headerHeight - MARGIN);
+      if (Math.abs(getScrollY() - dest) < 2) return;
+      window.scrollTo({ top: dest, behavior: 'auto' });
+      return;
+    }
+
+    // 코드 plaintext: 균일 라인 높이 기반 절대 위치 계산
+    const code = contentEl.querySelector('pre code');
+    if (code) {
+      const lineHeight = parseFloat(getComputedStyle(code).lineHeight) || 24;
+      const codeTopAbs = code.getBoundingClientRect().top + getScrollY();
+      const targetAbs = codeTopAbs + (line + off) * lineHeight;
+      const dest = Math.max(0, targetAbs - headerHeight - MARGIN);
+      if (Math.abs(getScrollY() - dest) < 2) return;
+      window.scrollTo({ top: dest, behavior: 'auto' });
+    }
+  }
+
+  /**
    * Scroll notebook to match teacher's visible cell range
    * 셀이 이미 화면에 보이면 불필요한 스크롤 방지
    */
@@ -1621,6 +1665,7 @@ const Renderer = (() => {
     removeDocumentCursor,
     scrollToLine,
     scrollToRatio,
+    scrollToDocumentAnchor,
     scrollNotebookToCell,
     scrollToNotebookAnchor,
     /** Register callback for when cursor removal changes cell layout (markup restore) */
