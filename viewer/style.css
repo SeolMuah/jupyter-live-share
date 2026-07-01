@@ -96,41 +96,48 @@ html::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* === 코드 가로 스크롤바 — 스크롤임을 명확히 보이도록 (얇지만 또렷, hover 시 강조) === */
-.document-content pre::-webkit-scrollbar,
+/* === 코드 가로 스크롤바 ===
+   plaintext(.document-content) 모드는 하단 고정 프록시(#hscroll-proxy)가 가로 스크롤을 담당하므로
+   코드블록 자체의 가로 스크롤바는 숨긴다 → 이중 스크롤바 방지. 스크롤 기능(overflow-x:auto)은 유지. */
+.document-content pre {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* legacy Edge/IE */
+}
+.document-content pre::-webkit-scrollbar {
+  display: none;              /* WebKit: 가로 스크롤바 미표시 (스크롤은 프록시/휠로 가능) */
+  height: 0;
+  width: 0;
+}
+
+/* 노트북 셀은 프록시가 없으므로 셀별 가로 스크롤바를 또렷하게 표시 (얇지만 또렷, hover 시 강조) */
 .cell-source::-webkit-scrollbar,
 .cell-source pre::-webkit-scrollbar,
 .cell-markup pre::-webkit-scrollbar {
   height: 10px;
   width: 10px;
 }
-.document-content pre::-webkit-scrollbar-track,
 .cell-source::-webkit-scrollbar-track,
 .cell-source pre::-webkit-scrollbar-track,
 .cell-markup pre::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.05);
   border-radius: 5px;
 }
-.document-content pre::-webkit-scrollbar-thumb,
 .cell-source::-webkit-scrollbar-thumb,
 .cell-source pre::-webkit-scrollbar-thumb,
 .cell-markup pre::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 5px;
 }
-.document-content pre::-webkit-scrollbar-thumb:hover,
 .cell-source::-webkit-scrollbar-thumb:hover,
 .cell-source pre::-webkit-scrollbar-thumb:hover,
 .cell-markup pre::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
 }
-[data-theme="dark"] .document-content pre::-webkit-scrollbar-track,
 [data-theme="dark"] .cell-source::-webkit-scrollbar-track,
 [data-theme="dark"] .cell-source pre::-webkit-scrollbar-track,
 [data-theme="dark"] .cell-markup pre::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.06);
 }
-[data-theme="dark"] .document-content pre::-webkit-scrollbar-thumb,
 [data-theme="dark"] .cell-source::-webkit-scrollbar-thumb,
 [data-theme="dark"] .cell-source pre::-webkit-scrollbar-thumb,
 [data-theme="dark"] .cell-markup pre::-webkit-scrollbar-thumb {
