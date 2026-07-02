@@ -119,9 +119,12 @@ const Renderer = (() => {
   // ~~는 보존 (정상 취소선), 단일 ~만 &#126;로 변환
   // 코드 펜스(```...```) 및 인라인 코드(`...`)는 건너뜀
   function escapeGfmSingleTildes(src) {
-    // 코드 펜스, 인라인 코드, 그 외 텍스트를 순서대로 매칭
-    return src.replace(/(```[\s\S]*?```|`[^`\n]+`)|(?<![~])~(?![~])/g,
-      (match, codeBlock) => codeBlock ? codeBlock : '&#126;');
+    // 코드 펜스/인라인 코드는 보존하고, 그 외 텍스트의 물결표 런(run)을 길이로 판정한다.
+    // 단일 물결표(~)만 &#126;로 변환하고 이중 이상(~~ 취소선)은 그대로 둔다.
+    // lookbehind 미사용 — 구형 Safari/iOS(16.4 미만)에서 정규식 리터럴 파싱 실패 방지.
+    return src.replace(/(```[\s\S]*?```|`[^`\n]+`)|(~+)/g,
+      (match, codeBlock, tildes) =>
+        codeBlock ? codeBlock : (tildes.length === 1 ? '&#126;' : tildes));
   }
 
   // marked.js math extension: $...$ 및 $$...$$ 수식을 emphasis 토크나이저보다 먼저 인식
@@ -357,6 +360,9 @@ const Renderer = (() => {
       const html = renderMarkdownWithLineNumbers(tokens, source);
       content.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
+        // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
+        // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
+        FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
       });
     }
 
@@ -580,6 +586,9 @@ const Renderer = (() => {
       const html = renderMarkdownWithLineNumbers(tokens, source);
       markupEl.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
+        // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
+        // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
+        FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
       });
       markupEl.querySelectorAll('pre code').forEach((block) => {
         if (block.classList.contains('language-mermaid')) return; // mermaid는 다이어그램으로 렌더
@@ -811,15 +820,85 @@ const Renderer = (() => {
   // Teacher viewport indicator 제거 — 선생님 스크롤이 학생 화면에 영향 없음
 
   /**
-   * Handle structure changes (add/remove cells)
+   * Handle structure changes (add/remove cells).
+   * 증분 갱신: 삽입/삭제된 셀만 DOM을 조작하고 나머지 셀 DOM은 그대로 유지해, 대형 노트북에서
+   * 전체 재렌더(전 셀 재하이라이팅·재수식·mermaid 재렌더)로 인한 렌더 스파이크와 깜빡임을
+   * 없앤다. 정합성이 조금이라도 어긋나면(예상 셀 수 불일치·알 수 없는 변경 유형·범위 이상)
+   * 즉시 전체 재렌더로 안전하게 폴백하므로, 화면 상태는 항상 cells 배열과 일치한다.
    */
   function handleStructureChange(change, cells) {
-    // Re-render entire notebook for simplicity
-    // renderNotebook internally calls resetCursorState()
     const container = document.getElementById('notebook-cells');
-    if (container && cells) {
+    if (!container || !cells) return;
+    if (!applyIncrementalStructureChange(change, cells, container)) {
+      // 폴백: 안전하게 전체 재렌더 (renderNotebook이 내부에서 resetCursorState 호출)
       renderNotebook({ cells, activeCellIndex: -1 }, container);
     }
+  }
+
+  /**
+   * DOM 셀들의 id(`cell-${i}`)와 dataset.index를 현재 순서대로 다시 부여한다.
+   * 삽입/삭제로 인덱스가 밀린 뒤에도 cell-${index} 참조(판서 위치·setActiveCell·cursor)가
+   * 정확히 맞도록 보장한다. 재렌더가 아니라 속성만 갱신하므로 저렴하다.
+   */
+  function reindexCells(container) {
+    const domCells = container.children;
+    for (let i = 0; i < domCells.length; i++) {
+      domCells[i].id = `cell-${i}`;
+      domCells[i].dataset.index = String(i);
+    }
+  }
+
+  /**
+   * 구조 변경을 증분 적용한다. 성공하면 true, 정합성이 맞지 않으면 false를 반환해
+   * 호출측이 전체 재렌더로 폴백하게 한다. (false 반환 전 DOM을 일부 건드렸더라도
+   * 폴백의 renderNotebook이 container.innerHTML을 비우고 재구성하므로 안전하다.)
+   */
+  function applyIncrementalStructureChange(change, cells, container) {
+    if (!change) return false;
+    const index = change.index;
+    if (typeof index !== 'number' || index < 0) return false;
+
+    const domCount = container.children.length;
+
+    if (change.type === 'insert') {
+      const added = change.addedCells || [];
+      if (added.length === 0) return false;
+      // 삽입 전 DOM 수 == (splice로 갱신된) 배열 수 - 추가 수 여야 정합
+      if (domCount !== cells.length - added.length) return false;
+      if (index > domCount) return false;
+    } else if (change.type === 'delete') {
+      const removedCount = change.removedCount || 1;
+      // 삭제 전 DOM 수 == (splice로 갱신된) 배열 수 + 제거 수 여야 정합
+      if (domCount !== cells.length + removedCount) return false;
+      if (index + removedCount > domCount) return false;
+    } else {
+      return false; // 알 수 없는 변경 유형 → 폴백
+    }
+
+    // 커서/하이라이트/렌더해시 리셋을 DOM 조작 "전에" 수행한다 (전체 재렌더와 동일 순서).
+    // 이렇게 해야 새로 삽입되는 마크업 셀이 renderCell 중 기록한 렌더 해시를
+    // 이후 reset이 지워버리지 않는다.
+    resetCursorState();
+    container.querySelectorAll('.cell.active').forEach((el) => el.classList.remove('active'));
+
+    if (change.type === 'insert') {
+      const added = change.addedCells;
+      const refNode = container.children[index] || null; // 삽입 지점의 기준 노드(라이브 컬렉션)
+      const frag = document.createDocumentFragment();
+      added.forEach((cell, i) => frag.appendChild(renderCell(cell, index + i)));
+      container.insertBefore(frag, refNode);
+    } else {
+      const removedCount = change.removedCount || 1;
+      for (let i = 0; i < removedCount; i++) {
+        // 라이브 컬렉션이라 제거할 때마다 뒤가 당겨져 항상 index 위치가 다음 제거 대상이 된다.
+        container.removeChild(container.children[index]);
+      }
+    }
+
+    reindexCells(container);
+
+    // 최종 정합성 검증: DOM 셀 수 == 배열 수. 어긋나면 폴백 신호.
+    return container.children.length === cells.length;
   }
 
   // === Plaintext Document Rendering ===
@@ -882,6 +961,9 @@ const Renderer = (() => {
       const html = renderMarkdownWithLineNumbers(tokens, content || '');
       mdEl.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
+        // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
+        // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
+        FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
       });
 
       // 코드 블록 하이라이팅

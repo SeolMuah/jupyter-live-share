@@ -43,6 +43,13 @@ const MAX_CACHE_ENTRIES = 100;
 // Background optimization queue
 const optimizeQueue = new Set<string>();
 let optimizeTimer: NodeJS.Timeout | null = null;
+// 백그라운드 최적화가 끝나 새 이미지가 캐시된 뒤 호출되는 훅. watcher가 등록해
+// 실시간 타이핑 중 처음 삽입된 이미지를 캐시 완료 시점에 재전송하도록 한다.
+let onImagesOptimized: (() => void) | null = null;
+
+export function setOnImagesOptimized(cb: (() => void) | null): void {
+  onImagesOptimized = cb;
+}
 
 // Config cache - refreshed per call batch, not per image
 let cachedConfig: LiveShareConfig | null = null;
@@ -427,12 +434,20 @@ async function processOptimizeQueue(): Promise<void> {
   const paths = Array.from(optimizeQueue);
   optimizeQueue.clear();
 
+  let anyCached = false;
   for (const absPath of paths) {
     try {
       await optimizeAndCache(absPath);
+      anyCached = true;
     } catch (err) {
       Logger.warn(`Background optimize failed: ${absPath} - ${err}`);
     }
+  }
+
+  // 새로 캐시된 이미지가 있으면 watcher에 알려 해당 콘텐츠를 재전송하게 한다.
+  // (재전송 시 full-resolve는 캐시 히트라 scheduleOptimize를 다시 부르지 않으므로 루프 없음.)
+  if (anyCached && onImagesOptimized) {
+    try { onImagesOptimized(); } catch (err) { Logger.warn(`onImagesOptimized hook failed: ${err}`); }
   }
 }
 

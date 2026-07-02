@@ -97,13 +97,16 @@ html::-webkit-scrollbar-thumb:hover {
 }
 
 /* === 코드 가로 스크롤바 ===
-   plaintext(.document-content) 모드는 하단 고정 프록시(#hscroll-proxy)가 가로 스크롤을 담당하므로
-   코드블록 자체의 가로 스크롤바는 숨긴다 → 이중 스크롤바 방지. 스크롤 기능(overflow-x:auto)은 유지. */
-.document-content pre {
+   단일 코드/텍스트 문서(.document-content 직계 <pre>)는 하단 고정 프록시(#hscroll-proxy)가
+   가로 스크롤을 담당하므로 자체 스크롤바를 숨긴다 → 이중 스크롤바 방지. overflow-x:auto는 유지.
+   ★ 직계 자식(>)으로 한정: 마크다운 문서는 프록시가 없고(.cell-markup 하위 코드블록) 별도
+   스크롤바 규칙(.cell-markup pre, 아래)을 쓰므로, 후손 선택자로 두면 그 스크롤바까지 숨겨져
+   가로로 넘치는 코드블록에 스크롤바도 프록시도 없는 상태가 된다. */
+.document-content > pre {
   scrollbar-width: none;      /* Firefox */
   -ms-overflow-style: none;   /* legacy Edge/IE */
 }
-.document-content pre::-webkit-scrollbar {
+.document-content > pre::-webkit-scrollbar {
   display: none;              /* WebKit: 가로 스크롤바 미표시 (스크롤은 프록시/휠로 가능) */
   height: 0;
   width: 0;

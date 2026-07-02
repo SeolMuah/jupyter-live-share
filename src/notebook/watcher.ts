@@ -3,7 +3,7 @@ import * as path from 'path';
 import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync, setLastScrollSync } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
-import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot } from '../utils/imageResolver';
+import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot, setOnImagesOptimized } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
 const TEXT_DEBOUNCE_MS = 100;
@@ -16,6 +16,10 @@ const VIEWPORT_THROTTLE_MS = 100; // Viewport sync needs fast but not excessive 
 // intermediate OR final keystroke is ever lost, only the intermediate broadcasts are
 // coalesced. Cell-switch/blur/stop paths flush any pending timer immediately.
 const CELL_UPDATE_DEBOUNCE_MS = 40;
+// cell:output 스로틀: tqdm/진행바처럼 초당 수십~수백 회 갱신되는 스트리밍 출력이 100명에게
+// 매 프레임 폭주하는 것을 억제한다. leading+trailing 방식이라 최종 출력은 반드시 전달된다
+// (trailing fire 시 currentNotebook에서 셀 출력을 다시 읽어 그 순간의 최신 상태를 보냄).
+const OUTPUT_THROTTLE_MS = 100;
 
 // 타이핑/커서 등 초당 다회 발생하는 이벤트의 상세 로그는 기본적으로 끈다 (필요 시 true로 전환)
 const SYNC_DEBUG = false;
@@ -24,7 +28,9 @@ const SYNC_DEBUG = false;
 const IMAGE_RELEVANT_LANGUAGES = new Set(['markdown', 'html', 'jupyter']);
 
 let disposables: vscode.Disposable[] = [];
-let debounceTimers: Map<number, NodeJS.Timeout> = new Map();
+const debounceTimers: Map<number, NodeJS.Timeout> = new Map();
+const outputTrailingTimers: Map<number, NodeJS.Timeout> = new Map(); // cell:output 스로틀용 셀별 trailing 타이머
+const lastOutputTimes: Map<number, number> = new Map();              // 셀별 마지막 cell:output 전송 시각
 let textDebounceTimer: NodeJS.Timeout | null = null;
 let lastFocusTime = 0;
 let lastCursorTime = 0;
@@ -33,7 +39,7 @@ let viewportTrailingTimer: NodeJS.Timeout | null = null;
 let syncBackupTimer: NodeJS.Timeout | null = null;
 let lastViewportTime = 0;
 let lastActiveCellIndex = -1;
-let lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
+const lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
 let watchMode: 'notebook' | 'plaintext' | null = null;
@@ -203,6 +209,85 @@ function flushCellUpdate(cellIndex: number) {
 }
 
 /**
+ * 백그라운드 이미지 최적화가 끝나 캐시가 채워진 뒤 호출된다. 실시간 타이핑 경로는
+ * cache-only라 세션 중 처음 삽입한 이미지가 캐시 미스로 원본 로컬 경로인 채 전송돼
+ * 학생 화면에서 깨진다. 최적화 완료 시점에 현재 활성 셀(또는 현재 텍스트 문서)을
+ * full-resolve로 한 번 재전송해 그 이미지를 정상 임베드한다.
+ * (한계: 활성 셀 기준이라 비활성 셀에 삽입한 이미지는 다음 편집/새 접속 시 보정된다.)
+ */
+function reBroadcastOptimizedImages(): void {
+  if (!imageShareEnabled) return;
+  // 새 접속자도 최신 이미지를 받도록 full 캐시를 무효화한다.
+  invalidateNotebookFullCache();
+  const baseDir = getBaseDir();
+  if (!baseDir) return;
+
+  if (watchMode === 'notebook' && currentNotebook) {
+    const idx = lastActiveCellIndex;
+    if (idx < 0 || idx >= currentNotebook.cellCount) return;
+    const cell = currentNotebook.cellAt(idx);
+    if (cell.kind !== vscode.NotebookCellKind.Markup) return;
+    const text = cell.document.getText();
+    if (!hasImagePatterns(text)) return;
+    broadcast('cell:update', { index: idx, source: resolveLocalImages(text, baseDir) });
+  } else if (watchMode === 'plaintext' && currentTextDocument) {
+    const text = currentTextDocument.getText();
+    if (!hasImagePatterns(text)) return;
+    broadcast('document:update', { content: resolveLocalImages(text, baseDir) });
+  }
+}
+
+/**
+ * 셀 출력을 지금 즉시 직렬화·전송한다. currentNotebook에서 셀 출력을 다시 읽으므로
+ * (이벤트 시점 스냅샷이 아니라) 호출 순간의 최신 출력을 보낸다 — trailing 타이머가
+ * fire될 때도 마지막 출력이 정확히 반영된다.
+ */
+function sendCellOutput(cellIndex: number) {
+  if (!currentNotebook) return;
+  if (cellIndex < 0 || cellIndex >= currentNotebook.cellCount) return;
+  const cell = currentNotebook.cellAt(cellIndex);
+  const outputs = serializeOutputs(cell.outputs);
+  // Resolve images in HTML output items (full resolution — 스로틀로 호출 빈도가 제한됨)
+  if (imageShareEnabled) {
+    const bd = getBaseDir();
+    for (const output of outputs) {
+      for (const item of output.items) {
+        if (item.mime === 'text/html') {
+          item.data = resolveLocalImages(item.data, bd);
+        }
+      }
+    }
+  }
+  lastOutputTimes.set(cellIndex, Date.now());
+  broadcast('cell:output', {
+    index: cellIndex,
+    outputs,
+    executionOrder: cell.executionSummary?.executionOrder,
+  });
+  if (SYNC_DEBUG) Logger.info(`Cell ${cellIndex} output updated`);
+}
+
+/**
+ * cell:output을 셀별 leading+trailing 스로틀로 전송한다. 스트리밍 출력(tqdm 등)이
+ * 초당 수백 회 갱신돼도 브로드캐스트는 OUTPUT_THROTTLE_MS 간격으로 합쳐지며,
+ * 마지막 출력은 trailing 타이머로 반드시 한 번 더 전송된다.
+ */
+function throttleCellOutput(cellIndex: number) {
+  const now = Date.now();
+  const since = now - (lastOutputTimes.get(cellIndex) || 0);
+  if (since < OUTPUT_THROTTLE_MS) {
+    const existing = outputTrailingTimers.get(cellIndex);
+    if (existing) clearTimeout(existing);
+    outputTrailingTimers.set(cellIndex, setTimeout(() => {
+      outputTrailingTimers.delete(cellIndex);
+      sendCellOutput(cellIndex);
+    }, OUTPUT_THROTTLE_MS - since));
+    return;
+  }
+  sendCellOutput(cellIndex);
+}
+
+/**
  * Clear all pending timers and reset state on file switch.
  * Prevents stale events (cursor, cell updates) from the previous file
  * from leaking into the new file context.
@@ -220,6 +305,19 @@ function flushAndResetState() {
     clearTimeout(timer);
   }
   debounceTimers.clear();
+  // cell:output 스로틀 타이머도 정리 — 이전 파일에서 예약된 trailing이 전환 후 발화해
+  // 새 파일에 엉뚱한 셀 출력을 보내는 것을 막는다.
+  for (const timer of outputTrailingTimers.values()) {
+    clearTimeout(timer);
+  }
+  outputTrailingTimers.clear();
+  lastOutputTimes.clear();
+  // 파일 전환용 백업 동기 타이머도 정리 (stopWatching과 동일하게). 정리하지 않으면 이전
+  // 파일에서 예약된 백업이 전환 후 발화해 중복 cell:update를 유발할 수 있다.
+  if (syncBackupTimer) {
+    clearTimeout(syncBackupTimer);
+    syncBackupTimer = null;
+  }
   invalidateNotebookFullCache();
   if (textDebounceTimer) {
     clearTimeout(textDebounceTimer);
@@ -403,6 +501,9 @@ export function startWatching() {
   const folders = vscode.workspace.workspaceFolders;
   setProjectRoot(folders?.[0]?.uri.fsPath ?? null);
 
+  // 백그라운드 이미지 최적화 완료 시 활성 셀/문서를 재전송하도록 훅 등록
+  setOnImagesOptimized(reBroadcastOptimizedImages);
+
   // Register new viewer handler once (handles both notebook and plaintext modes)
   setupNewViewerHandler();
 
@@ -499,35 +600,19 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
         }
 
         if (change.outputs) {
-          // 셀 실행 결과 변경 → 즉시 전송 (debounce 없음)
-          const cellIndex = change.cell.index;
-          const outputs = serializeOutputs(change.outputs);
-          // Resolve images in HTML output items (full resolution — outputs are infrequent)
-          if (imageShareEnabled) {
-            const bd = getBaseDir();
-            for (const output of outputs) {
-              for (const item of output.items) {
-                if (item.mime === 'text/html') {
-                  item.data = resolveLocalImages(item.data, bd);
-                }
-              }
-            }
-          }
-          broadcast('cell:output', {
-            index: cellIndex,
-            outputs,
-            executionOrder: change.cell.executionSummary?.executionOrder,
-          });
-          if (SYNC_DEBUG) Logger.info(`Cell ${cellIndex} output updated`);
+          // 셀 실행 결과 변경 → 셀별 leading+trailing 스로틀로 전송 (스트리밍 출력 폭주 억제).
+          throttleCellOutput(change.cell.index);
         }
       }
 
-      // 구조 변경(셀 추가/삭제)이 있는 이벤트면, 인덱스 기반 대기 디바운스를 취소한다.
-      // 인덱스가 밀린 뒤 flush되면 다른 셀의 내용을 잘못된 index로 보낼 수 있기 때문.
+      // 구조 변경(셀 추가/삭제)이 있는 이벤트면, 인덱스 기반 대기 타이머를 모두 취소한다.
+      // 인덱스가 밀린 뒤 flush되면 다른 셀의 내용/출력을 잘못된 index로 보낼 수 있기 때문.
       // (안전 우선: 잘못된 내용 전송을 막는다. 취소된 마지막 편집분은 다음 편집/백업으로 보정됨.)
-      if (event.contentChanges.length > 0 && debounceTimers.size > 0) {
+      if (event.contentChanges.length > 0) {
         for (const timer of debounceTimers.values()) clearTimeout(timer);
         debounceTimers.clear();
+        for (const timer of outputTrailingTimers.values()) clearTimeout(timer);
+        outputTrailingTimers.clear();
       }
 
       // 셀 구조 변경 (추가/삭제)
@@ -978,6 +1063,12 @@ export function stopWatching() {
     flushCellUpdate(idx);
   }
   debounceTimers.clear();
+  // cell:output 스로틀 trailing 타이머 정리 (세션 종료 후 발화 방지).
+  for (const timer of outputTrailingTimers.values()) {
+    clearTimeout(timer);
+  }
+  outputTrailingTimers.clear();
+  lastOutputTimes.clear();
   invalidateNotebookFullCache();
 
   if (cursorTrailingTimer) {
@@ -1001,6 +1092,7 @@ export function stopWatching() {
   }
 
   lastSentSources.clear();
+  setOnImagesOptimized(null);
   clearImageCache();
   setProjectRoot(null);
   currentNotebook = null;

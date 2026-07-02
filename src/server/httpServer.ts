@@ -16,10 +16,20 @@ const activeConnections = new Set<net.Socket>();
  * 포트를 점유 중인 프로세스를 강제 종료한다 (이전 비정상 종료 복구용)
  */
 function killProcessOnPort(port: number): boolean {
+  // 포트 값을 셸 명령에 문자열 보간하므로, 신뢰 가능한 정수인지 먼저 검증한다.
+  // VS Code 설정(get<number>)은 런타임 타입을 강제하지 않아 악성 워크스페이스가
+  // 문자열("48632; <명령>")을 주입할 수 있으므로 명령 주입을 원천 차단한다.
+  const p = Number(port);
+  if (!Number.isInteger(p) || p < 1 || p > 65535) {
+    Logger.error(`killProcessOnPort: invalid port ${String(port)}`);
+    return false;
+  }
+  // execSync에 넘길 PID도 순수 숫자만 허용한다 (심층 방어).
+  const isPid = (s: string): boolean => /^\d+$/.test(s);
   try {
     if (process.platform === 'win32') {
       // netstat으로 포트 사용 중인 PID 찾기
-      const output = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, {
+      const output = execSync(`netstat -ano | findstr :${p} | findstr LISTENING`, {
         encoding: 'utf-8',
         timeout: 5000,
       });
@@ -28,14 +38,14 @@ function killProcessOnPort(port: number): boolean {
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
         const pid = parts[parts.length - 1];
-        if (pid && pid !== '0') {
+        if (pid && pid !== '0' && isPid(pid)) {
           pids.add(pid);
         }
       }
       for (const pid of pids) {
         try {
           execSync(`taskkill /PID ${pid} /F /T`, { timeout: 5000 });
-          Logger.info(`Killed process ${pid} occupying port ${port}`);
+          Logger.info(`Killed process ${pid} occupying port ${p}`);
         } catch {
           // PID가 이미 종료된 경우 무시
         }
@@ -43,15 +53,15 @@ function killProcessOnPort(port: number): boolean {
       return pids.size > 0;
     } else {
       // Linux/macOS: lsof로 포트 사용 중인 PID 찾기
-      const output = execSync(`lsof -ti :${port}`, {
+      const output = execSync(`lsof -ti :${p}`, {
         encoding: 'utf-8',
         timeout: 5000,
       });
-      const pids = output.trim().split('\n').filter(Boolean);
+      const pids = output.trim().split('\n').filter((s) => isPid(s));
       for (const pid of pids) {
         try {
           execSync(`kill -9 ${pid}`, { timeout: 5000 });
-          Logger.info(`Killed process ${pid} occupying port ${port}`);
+          Logger.info(`Killed process ${pid} occupying port ${p}`);
         } catch {
           // PID가 이미 종료된 경우 무시
         }

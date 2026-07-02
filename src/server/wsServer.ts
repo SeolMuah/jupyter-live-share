@@ -44,7 +44,7 @@ let onViewerCountChange: ((count: number) => void) | null = null;
 let sessionPin: string | null = null;
 let teacherName: string = 'Teacher';
 let teacherToken: string | null = null;
-let clientMeta: Map<WebSocket, ClientMeta> = new Map();
+const clientMeta: Map<WebSocket, ClientMeta> = new Map();
 let currentPoll: PollState | null = null;
 let chatMessageId = 0;
 
@@ -71,6 +71,13 @@ const EPHEMERAL_TYPES = new Set([
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 const HEARTBEAT_INTERVAL_MS = 30000;
+
+// 연결 남용 방어(가용성): 터널 뒤에서는 모든 원격이 127.0.0.1로 보여 IP 기반 방어가
+// 불가능하므로, join을 완료하지 않은 소켓이 FD/메모리를 점유하는 것을 시간·총량으로 제한한다.
+const UNAUTHENTICATED_GRACE_MS = 15000; // join 없이 이 시간 경과 시 소켓 정리
+// 전체 동시연결 상한 = maxViewers 기준 여유분(chatOnly + 교사 패널 2개 등)을 더해 산출.
+const CONNECTION_CAP_BASE = 16;
+const CONNECTION_CAP_MULTIPLIER = 2;
 
 interface DrawStroke {
   strokeId: string;
@@ -215,7 +222,17 @@ export function startWsServer(
     maxPayload: WS_MAX_PAYLOAD,
   });
 
+  // 전체 동시연결 하드캡: join 여부와 무관하게 소켓 수 자체를 상한으로 묶어
+  // 미인증 연결 홍수로 인한 FD/메모리 고갈(DoS)을 방어한다.
+  const connectionCap = maxViewers * CONNECTION_CAP_MULTIPLIER + CONNECTION_CAP_BASE;
+
   wss.on('connection', (ws) => {
+    // 이 시점에 새 소켓은 이미 wss.clients에 포함되어 size에 반영되어 있다.
+    if (wss && wss.clients.size > connectionCap) {
+      try { ws.close(1013, 'Server busy'); } catch { /* 이미 닫힘 */ }
+      return;
+    }
+
     // isTeacher는 더 이상 소스 IP로 부여하지 않는다 (터널을 거치면 모든 원격 학생이
     // 127.0.0.1로 보이는 문제). join 메시지에서 유효한 teacherToken을 제시한 경우에만 true가 된다.
     const meta: ClientMeta = {
@@ -229,6 +246,13 @@ export function startWsServer(
     };
     clientMeta.set(ws, meta);
 
+    // 미인증(join 미완료) 유예 타이머: 시간 내 어떤 형태로도 join하지 않으면 소켓을 정리한다.
+    const graceTimer = setTimeout(() => {
+      if (!meta.countedAsViewer && !meta.countedAsChatOnly && !meta.isTeacherPanel) {
+        try { ws.close(4008, 'Join timeout'); } catch { /* 이미 닫힘 */ }
+      }
+    }, UNAUTHENTICATED_GRACE_MS);
+
     // Heartbeat liveness flag — reset to true on connect and on every pong.
     (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
     ws.on('pong', () => {
@@ -241,6 +265,14 @@ export function startWsServer(
 
         if (msg.type === 'join') {
           const joinData = msg.data as { pin?: string; teacherPanel?: boolean; chatOnly?: boolean; teacherToken?: string };
+
+          // 멱등성 가드: 이 소켓이 이미 join을 완료했다면(교사패널/채팅/뷰어 어느 형태든)
+          // 재처리하지 않는다. 신뢰 불가한 클라이언트가 join을 반복 전송해 viewerCount/
+          // chatOnlyCount를 부풀려 정원을 소진시키는 DoS(griefing)를 차단한다.
+          if (meta.countedAsViewer || meta.countedAsChatOnly || meta.isTeacherPanel) {
+            sendTo(ws, 'join:result', { success: true });
+            return;
+          }
 
           // Teacher Panel connection (sidebar WebSocket / Teacher Preview webview)
           // 오직 유효한 teacherToken을 제시한 경우에만 교사 권한을 부여한다.
@@ -322,8 +354,10 @@ export function startWsServer(
             return;
           }
 
-          // Max viewers check
-          if (viewerCount >= maxViewers) {
+          // Max viewers check — chatOnly 연결과 합산해 정원을 대칭적으로 검사한다.
+          // (chatOnly 분기와 동일 기준. 한쪽만 chatOnlyCount를 무시하면 총 접속자가
+          //  maxViewers를 최대 2배까지 초과할 수 있어 50~100명 안정화 목표를 깬다.)
+          if (viewerCount + chatOnlyCount >= maxViewers) {
             sendTo(ws, 'join:result', { success: false, error: 'Session is full' });
             ws.close(4002, 'Session full');
             return;
@@ -496,6 +530,7 @@ export function startWsServer(
     });
 
     ws.on('close', () => {
+      clearTimeout(graceTimer);
       // Only decrement if this client was actually counted as a viewer
       if (meta.countedAsViewer) {
         meta.countedAsViewer = false; // Prevent double decrement
@@ -573,7 +608,8 @@ export function broadcast(type: string, data: unknown) {
     if (buffered > WS_HARD_LIMIT) { client.terminate(); return; }
     // SOFT limit 초과 시 순간성 힌트(커서/스크롤)만 스킵 (문서 상태 메시지는 항상 전송).
     if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
-    client.send(message);
+    // 한 소켓의 send가 동기적으로 throw해도 나머지 클라이언트 전파가 끊기지 않도록 격리한다.
+    try { client.send(message); } catch (err) { Logger.error('broadcast send failed', err); }
   });
 }
 
@@ -587,7 +623,7 @@ function broadcastExclude(exclude: WebSocket, type: string, data: unknown) {
     const buffered = client.bufferedAmount;
     if (buffered > WS_HARD_LIMIT) { client.terminate(); return; }
     if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
-    client.send(message);
+    try { client.send(message); } catch (err) { Logger.error('broadcast send failed', err); }
   });
 }
 
