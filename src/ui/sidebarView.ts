@@ -777,11 +777,14 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
 
       btnSend.addEventListener('click', sendChat);
       chatInput.addEventListener('keydown', (e) => {
+        // IME(한글) 조합 확정 Enter가 제출 Enter와 겹쳐 이중 전송되는 것 방지
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') sendChat();
       });
 
       // Poll question input - Enter to start
       pollQuestion.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') btnPollStart.click();
       });
 

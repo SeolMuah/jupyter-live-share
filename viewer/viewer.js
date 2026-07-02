@@ -88,6 +88,13 @@
   const btnPoll = document.getElementById('btn-poll');
   const btnEndPoll = document.getElementById('btn-end-poll');
 
+  // 한글 등 IME 조합 중 Enter는 "글자 확정"이지 제출이 아니다. 조합 확정 Enter와 제출 Enter가
+  // keydown을 연달아 발생시켜 채팅이 2번 전송되고, 두 번째가 서버 rate limit(500ms)에 걸려
+  // "Too fast. Please wait a moment."가 뜨는 원인이었다. (keyCode 229 = 레거시 IME 신호)
+  function isImeComposing(e) {
+    return e.isComposing || e.keyCode === 229;
+  }
+
   // Initialize
   init();
 
@@ -125,17 +132,20 @@
 
     pinSubmit?.addEventListener('click', submitPin);
     pinInput?.addEventListener('keydown', (e) => {
+      if (isImeComposing(e)) return;
       if (e.key === 'Enter') submitPin();
     });
 
     nameSubmit?.addEventListener('click', submitName);
     nameInput?.addEventListener('keydown', (e) => {
+      if (isImeComposing(e)) return;
       if (e.key === 'Enter') submitName();
     });
 
     // Chat events
     chatSend?.addEventListener('click', sendChatMessage);
     chatInput?.addEventListener('keydown', (e) => {
+      if (isImeComposing(e)) return;
       if (e.key === 'Enter') sendChatMessage();
     });
     chatClose?.addEventListener('click', () => toggleChat(false));
@@ -199,6 +209,7 @@
     });
     pollModalStart?.addEventListener('click', submitNewPoll);
     pollQuestionInput?.addEventListener('keydown', (e) => {
+      if (isImeComposing(e)) return;
       if (e.key === 'Enter') submitNewPoll();
     });
 
@@ -698,12 +709,14 @@
     // 커서 스크롤 우선 (300ms 이내 cursor:position이 있었으면 무시)
     if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
 
-    // 프리뷰가 에디터를 따라 스크롤하기 직전 타임스탬프 기록 → 위 onScroll 재전송 억제
-    if (isTeacherPreview) lastProgrammaticScrollTime = performance.now();
-
     if (data.type === 'notebook' && documentType === 'notebook') {
-      Renderer.scrollToNotebookAnchor(data.cellIndex, data.offsetRatio);
+      const scrolled = Renderer.scrollToNotebookAnchor(data.cellIndex, data.offsetRatio);
+      // 프리뷰 에코 억제: 실제로 스크롤한 경우에만 억제창을 켠다. 튐 제거로 스크롤을 생략했는데
+      // 억제하면, 직후 교사의 진짜 수동 스크롤이 억제창(250ms)에 먹혀 동기화를 놓친다.
+      if (isTeacherPreview && scrolled) lastProgrammaticScrollTime = performance.now();
     } else if (data.type === 'plaintext' && documentType === 'plaintext') {
+      // 프리뷰가 에디터를 따라 스크롤하기 직전 타임스탬프 기록 → onScroll 재전송 억제
+      if (isTeacherPreview) lastProgrammaticScrollTime = performance.now();
       // 새 라인 앵커 방식 우선, 없으면 비율 fallback
       if (typeof data.line === 'number') {
         Renderer.scrollToDocumentAnchor(data.line, typeof data.offsetRatio === 'number' ? data.offsetRatio : 0);

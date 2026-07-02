@@ -775,34 +775,36 @@ const Renderer = (() => {
   }
 
   /**
-   * Scroll notebook to match teacher's visible cell range
-   * 셀이 이미 화면에 보이면 불필요한 스크롤 방지
+   * 헤더 아래로 처음 보이는(=최상단 가시) 셀의 인덱스. 없으면 -1.
+   * DOM 순서 i가 곧 셀 인덱스다(reindexCells가 id `cell-i`를 위치와 일치시킴).
    */
-  function scrollNotebookToCell(cellIndex) {
-    const cellEl = document.getElementById(`cell-${cellIndex}`);
-    if (!cellEl) return;
-
+  function getTopmostVisibleCellIndex() {
+    const container = document.getElementById('notebook-cells');
+    if (!container) return -1;
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
-    const rect = cellEl.getBoundingClientRect();
-
-    // 셀 상단이 뷰포트 안에 있으면 스크롤 불필요
-    if (rect.top >= headerHeight && rect.top <= window.innerHeight - 100) {
-      return;
+    const children = container.children;
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].getBoundingClientRect().bottom > headerHeight) return i;
     }
-
-    window.scrollTo({
-      top: Math.max(0, rect.top + getScrollY() - headerHeight - 8),
-      behavior: 'auto'
-    });
+    return -1;
   }
 
   /**
-   * Scroll notebook to a cell-relative anchor position
-   * Uses cellIndex + offsetRatio for screen-size-independent positioning
+   * Scroll notebook to a cell-relative anchor position.
+   * cellIndex + offsetRatio(화면 크기 독립)로 위치를 잡는다.
+   * 반환: 실제로 window.scrollTo를 호출했으면 true (프리뷰 에코 억제 판단용).
+   *
+   * ★ 튐(yank) 제거: 노트북은 VS Code API가 셀 내부 스크롤 오프셋을 제공하지 않아 offsetRatio가
+   * 항상 0(셀 단위)이다. 이때 학생이 이미 이 셀을 최상단으로 보고 있으면(긴 셀 내부로 스크롤해
+   * 내려가 있는 상태 포함) 셀 최상단으로 끌어올리지 않는다 — 그렇지 않으면 교사가 스크롤할 때마다
+   * 학생 화면이 셀 맨 위로 홱 튄다. 셀이 화면 밖이면 정상적으로 상단으로 데려온다.
    */
   function scrollToNotebookAnchor(cellIndex, offsetRatio) {
     const cellEl = document.getElementById('cell-' + cellIndex);
-    if (!cellEl) return;
+    if (!cellEl) return false;
+
+    // 셀 단위(offsetRatio 0)이고 이미 이 셀을 최상단으로 보는 중이면 스크롤하지 않는다.
+    if (!offsetRatio && getTopmostVisibleCellIndex() === cellIndex) return false;
 
     const headerHeight = document.getElementById('header')?.offsetHeight || 48;
     // Use getBoundingClientRect for reliable positioning regardless of
@@ -812,9 +814,10 @@ const Renderer = (() => {
     const targetScroll = rect.top + currentScroll + (rect.height * offsetRatio) - headerHeight;
 
     // 이미 5px 이내면 스크롤 생략 (jitter 방지)
-    if (Math.abs(currentScroll - targetScroll) < 5) return;
+    if (Math.abs(currentScroll - targetScroll) < 5) return false;
 
     window.scrollTo({ top: Math.max(0, targetScroll), behavior: 'auto' });
+    return true;
   }
 
   // Teacher viewport indicator 제거 — 선생님 스크롤이 학생 화면에 영향 없음
@@ -829,9 +832,36 @@ const Renderer = (() => {
   function handleStructureChange(change, cells) {
     const container = document.getElementById('notebook-cells');
     if (!container || !cells) return;
+
+    // 스크롤 보존: 셀 삭제로 페이지 높이가 줄거나 DOM이 재구성되면 브라우저가 스크롤을
+    // 잃어 화면이 맨 위로 튄다. 뷰포트에 보이는 첫 셀을 앵커로 잡아 변경 후에도 같은
+    // 화면 위치를 유지한다 (스크롤 앵커링 미지원 브라우저 포함).
+    const header = document.getElementById('header');
+    const headerHeight = (header && header.offsetHeight) || 48;
+    let anchorEl = null;
+    let anchorTop = 0;
+    for (const el of container.children) {
+      const r = el.getBoundingClientRect();
+      if (r.bottom > headerHeight) { anchorEl = el; anchorTop = r.top; break; }
+    }
+    const prevScrollY = getScrollY();
+
     if (!applyIncrementalStructureChange(change, cells, container)) {
-      // 폴백: 안전하게 전체 재렌더 (renderNotebook이 내부에서 resetCursorState 호출)
+      // 폴백: 안전하게 전체 재렌더 (renderNotebook이 내부에서 resetCursorState 호출).
+      // innerHTML=''로 페이지 높이가 일시 0이 되며 브라우저가 스크롤을 0으로 클램프하므로,
+      // 재렌더 후 이전 스크롤 위치로 복원한다 (새 문서 높이 내로 클램프).
       renderNotebook({ cells, activeCellIndex: -1 }, container);
+      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      window.scrollTo({ top: Math.min(prevScrollY, maxScroll), behavior: 'auto' });
+      return;
+    }
+
+    // 증분 성공: 앵커 셀이 살아남았으면 화면상 같은 위치를 유지하도록 보정.
+    // (브라우저 자체 스크롤 앵커링이 이미 보정한 경우 delta=0이라 no-op.
+    //  앵커 셀 자체가 삭제된 경우엔 보정 없이 자연 흐름에 맡긴다 — 아래 내용이 올라와 채워짐.)
+    if (anchorEl && anchorEl.isConnected) {
+      const delta = anchorEl.getBoundingClientRect().top - anchorTop;
+      if (delta) window.scrollBy(0, delta);
     }
   }
 
@@ -1746,7 +1776,6 @@ const Renderer = (() => {
     removeDocumentCursor,
     scrollToRatio,
     scrollToDocumentAnchor,
-    scrollNotebookToCell,
     scrollToNotebookAnchor,
     renderMermaidBlocks,
     reRenderMermaid,
