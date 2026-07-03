@@ -476,11 +476,6 @@ header {
   color: #795e26;
 }
 
-/* PascalCase 호출(클래스/생성자)은 클래스/타입 색으로 (라이트) */
-.hljs-title.function_.hljs-title-type {
-  color: #267f99;
-}
-
 .hljs-variable,
 .hljs-template-variable {
   color: #001080;
@@ -533,19 +528,9 @@ header {
   background: #e6ffec;
 }
 
-/* Dark Mode - VS Code Dark+ Theme (로컬 authoritative, CDN 테마 제거) */
-/* 제어 키워드는 보라 (if/elif/else/return/for/while/import/from/await…) — Dark+의 생기 있는 포인트 */
+/* Dark Mode - VS2015 Theme */
 [data-theme="dark"] .hljs-keyword,
-[data-theme="dark"] .hljs-selector-tag {
-  color: #c586c0;
-}
-
-/* None/True/False 등 상수 리터럴은 파랑 (숫자와 분리해야 Dark+처럼 보임) */
-[data-theme="dark"] .hljs-literal {
-  color: #569cd6;
-}
-
-/* HTML/XML 태그는 파랑 유지 */
+[data-theme="dark"] .hljs-selector-tag,
 [data-theme="dark"] .hljs-tag {
   color: #569cd6;
 }
@@ -557,7 +542,8 @@ header {
   color: #ce9178;
 }
 
-[data-theme="dark"] .hljs-number {
+[data-theme="dark"] .hljs-number,
+[data-theme="dark"] .hljs-literal {
   color: #b5cea8;
 }
 
@@ -572,11 +558,6 @@ header {
 [data-theme="dark"] .hljs-title.class_,
 [data-theme="dark"] .hljs-class .hljs-title {
   color: #dcdcaa;
-}
-
-/* PascalCase 호출(클래스/생성자)은 함수 노랑이 아니라 클래스/타입 청록으로 — 노랑 과다 완화 */
-[data-theme="dark"] .hljs-title.function_.hljs-title-type {
-  color: #4ec9b0;
 }
 
 [data-theme="dark"] .hljs-variable,
@@ -616,11 +597,6 @@ header {
 [data-theme="dark"] .hljs-addition {
   color: #b5cea8;
   background: #1e3a1e;
-}
-
-/* 코드 내 링크 토큰: 다크 배경 대비 위해 밝은 파랑 (라이트의 #0000ff는 대비 낮음) */
-[data-theme="dark"] .hljs-link {
-  color: #569cd6;
 }
 
 /* Copy button */

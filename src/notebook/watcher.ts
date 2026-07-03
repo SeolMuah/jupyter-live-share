@@ -521,17 +521,36 @@ export function startWatching() {
   // Register new viewer handler once (handles both notebook and plaintext modes)
   setupNewViewerHandler();
 
-  // 현재 활성 노트북 추적
-  const activeEditor = vscode.window.activeNotebookEditor;
-  if (activeEditor) {
-    startWatchingNotebook(activeEditor.notebook);
+  // 1) 포커스된 노트북 에디터 우선
+  const activeNotebook = vscode.window.activeNotebookEditor;
+  if (activeNotebook) {
+    startWatchingNotebook(activeNotebook.notebook);
     return;
   }
 
-  // 노트북이 아니면 텍스트 에디터 확인
+  // 2) 포커스된 텍스트 파일 에디터
   const activeTextEditor = vscode.window.activeTextEditor;
   if (activeTextEditor && activeTextEditor.document.uri.scheme === 'file') {
     startWatchingTextDocument(activeTextEditor.document);
+    return;
+  }
+
+  // 3) ★ 포커스된 파일 에디터가 없을 때(사이드바 '세션 시작' 버튼=웹뷰로 시작하면 포커스가 웹뷰로 가서
+  //    activeNotebookEditor/activeTextEditor가 비게 됨) '열려있는(보이는)' 에디터로 폴백한다.
+  //    이게 없으면 파일을 이미 열어둔 상태여도 idle로 빠져 학생·Teacher Preview가 초기 full-sync를
+  //    못 받고 '로딩중'에서 멈춘다(새 파일을 선택해야 풀리던 증상). 노트북을 우선 검사한다.
+  const visibleNotebook = vscode.window.visibleNotebookEditors.find(
+    (e) => e.notebook.notebookType === 'jupyter-notebook'
+  );
+  if (visibleNotebook) {
+    startWatchingNotebook(visibleNotebook.notebook);
+    return;
+  }
+  const visibleTextEditor = vscode.window.visibleTextEditors.find(
+    (e) => e.document.uri.scheme === 'file'
+  );
+  if (visibleTextEditor) {
+    startWatchingTextDocument(visibleTextEditor.document);
     return;
   }
 

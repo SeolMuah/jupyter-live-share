@@ -8,23 +8,6 @@ const Renderer = (() => {
   let layoutChangeCallback = null;
   let lastRenderedHash = {};
 
-  // highlight.js는 semantic 하이라이팅이 아니라 '이름(' 형태의 모든 호출을 함수(hljs-title.function_)로
-  // 태깅한다 → PascalCase 클래스/생성자(StateGraph, LumiState, HumanMessage 등)까지 함수 노랑이 되어
-  // 화면이 과하게 노래진다. VS Code Dark+는 이런 것을 청록(class/type)으로 칠하므로, 대문자로 시작하는
-  // title.function_ 토큰에 마커 클래스를 덧붙여 CSS에서 청록으로 되돌린다(소문자 메서드는 노랑 유지).
-  if (typeof hljs !== 'undefined' && typeof hljs.addPlugin === 'function') {
-    hljs.addPlugin({
-      'after:highlight': (result) => {
-        if (result && typeof result.value === 'string') {
-          result.value = result.value.replace(
-            /<span class="hljs-title function_">([A-Z][A-Za-z0-9_]*)<\/span>/g,
-            '<span class="hljs-title function_ hljs-title-type">$1</span>'
-          );
-        }
-      },
-    });
-  }
-
   // Mermaid 다이어그램 렌더링 상태
   let mermaidReady = false;
   let mermaidCounter = 0;
