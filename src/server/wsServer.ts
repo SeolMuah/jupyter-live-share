@@ -274,8 +274,17 @@ export function startWsServer(
             return;
           }
 
-          // Teacher Panel connection (sidebar WebSocket / Teacher Preview webview)
+          // Teacher Panel connection (sidebar WebSocket / Teacher Preview webview / 교사 브라우저 탭)
           // 오직 유효한 teacherToken을 제시한 경우에만 교사 권한을 부여한다.
+          // 무효/빈 토큰(세션 시작 전 생성된 패널, 이전 세션의 stale 토큰)은 학생 분기로
+          // 폴스루시키지 않고 명시적으로 거부한다 — 교사 연결이 어떤 경로로도 학생 수
+          // (viewerCount)에 오염되지 않게 보장 (4003은 클라이언트의 재접속 제외 코드).
+          if (joinData.teacherPanel && !isValidTeacherToken(joinData.teacherToken)) {
+            Logger.warn('Rejected teacherPanel join with invalid/stale token');
+            sendTo(ws, 'join:result', { success: false, error: 'Invalid teacher token' });
+            ws.close(4003, 'Invalid teacher token');
+            return;
+          }
           if (joinData.teacherPanel && isValidTeacherToken(joinData.teacherToken)) {
             meta.authenticated = true;
             meta.isTeacher = true;
@@ -612,7 +621,9 @@ export function broadcast(type: string, data: unknown) {
     if (client.readyState !== WebSocket.OPEN) return;
     const buffered = client.bufferedAmount;
     // 따라잡지 못하는 클라이언트는 종료 → 재접속 시 full-sync로 최신화 (내용 유실 없음).
-    if (buffered > WS_HARD_LIMIT) { client.terminate(); return; }
+    // 단 session:end는 terminate하지 않는다 — 직후 stopWsServer의 closeAllClients(1000)가
+    // 정상 close를 보내므로, 여기서 terminate하면 1006 재접속 좀비를 만들 뿐이다.
+    if (buffered > WS_HARD_LIMIT) { if (type !== 'session:end') client.terminate(); return; }
     // SOFT limit 초과 시 순간성 힌트(커서/스크롤)만 스킵 (문서 상태 메시지는 항상 전송).
     if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
     // 한 소켓의 send가 동기적으로 throw해도 나머지 클라이언트 전파가 끊기지 않도록 격리한다.
@@ -676,7 +687,12 @@ export function stopWsServer(): Promise<void> {
       resolve();
     });
 
-    terminateAllClients();
+    // terminate()가 아닌 정상 close(1000)로 종료한다: terminate는 close frame 없이
+    // 소켓을 파괴해, session:end 프레임을 미처 못 받은 클라이언트가 1006으로 무한
+    // 재접속하다가 같은 포트의 '다음' 세션에 유령 재조인하는 경로를 만들었다.
+    // 1000은 클라이언트(websocket.js)의 재접속 제외 코드라 프레임 유실과 무관하게 안전.
+    // 느린/죽은 소켓은 위 SHUTDOWN_TIMEOUT의 terminateAllClients가 정리한다.
+    closeAllClients(1000, 'Session ended');
   });
 }
 
@@ -712,6 +728,16 @@ function terminateAllClients(): void {
   for (const client of wss.clients) {
     try {
       client.terminate();
+    } catch { /* ignore */ }
+  }
+}
+
+/** 정상 close 핸드셰이크로 전 클라이언트 종료 (버퍼 flush 후 close frame 전송). */
+function closeAllClients(code: number, reason: string): void {
+  if (!wss) return;
+  for (const client of wss.clients) {
+    try {
+      client.close(code, reason);
     } catch { /* ignore */ }
   }
 }

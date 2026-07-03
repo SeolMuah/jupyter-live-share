@@ -16,11 +16,24 @@ export class TeacherPreviewPanel {
     this.panel = panel;
     this.extensionUri = extensionUri;
 
-    const port = getConfig().port;
-    const wsUrl = `ws://localhost:${port}`;
-    this.panel.webview.html = this.getHtmlContent(wsUrl);
+    this.refreshHtml();
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+  }
+
+  /**
+   * 세션 상태에 맞는 HTML을 설정한다.
+   * 세션이 없으면(teacherToken 부재) 뷰어를 로드하지 않고 대기 화면을 보여준다 —
+   * 토큰 ''로 조인해 서버에서 거부당하거나 학생으로 오집계되는 경로를 원천 차단.
+   * 세션 시작 시 startSession → reload()가 패널을 재생성해 라이브 뷰어로 전환한다.
+   */
+  private refreshHtml(): void {
+    if (getTeacherToken()) {
+      const port = getConfig().port;
+      this.panel.webview.html = this.getHtmlContent(`ws://localhost:${port}`);
+    } else {
+      this.panel.webview.html = this.getIdleHtmlContent();
+    }
   }
 
   public static createOrShow(context: vscode.ExtensionContext, viewColumn?: vscode.ViewColumn, preserveFocus = false) {
@@ -48,15 +61,83 @@ export class TeacherPreviewPanel {
     Logger.info('Teacher preview panel opened');
   }
 
+  /**
+   * 확장호스트 재시작(확장 업데이트 후 'Restart Extensions', 윈도우 리로드 등)을
+   * 시각적으로 살아넘어온 웹뷰 탭을 재입양한다. Serializer가 없으면 이런 탭은
+   * currentPanel 추적이 끊긴 '고아'가 되어 reload()가 no-op → 새 세션을 시작해도
+   * "Session has ended."인 채 영영 갱신되지 않는 버그의 근본 원인이었다.
+   */
+  public static registerSerializer(context: vscode.ExtensionContext): vscode.Disposable {
+    return vscode.window.registerWebviewPanelSerializer(TeacherPreviewPanel.viewType, {
+      deserializeWebviewPanel: async (panel: vscode.WebviewPanel) => {
+        if (TeacherPreviewPanel.currentPanel) {
+          // 이미 추적 중인 패널이 있으면 복원된 쪽은 중복 — 정리한다.
+          panel.dispose();
+          return;
+        }
+        panel.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [
+            vscode.Uri.joinPath(context.extensionUri, 'viewer'),
+            vscode.Uri.joinPath(context.extensionUri, 'dist', 'viewer'),
+          ],
+        };
+        TeacherPreviewPanel.currentPanel = new TeacherPreviewPanel(panel, context.extensionUri);
+        Logger.info('Teacher preview panel revived after extension host restart');
+      },
+    });
+  }
+
   public static reload(context: vscode.ExtensionContext): void {
-    if (TeacherPreviewPanel.currentPanel) {
-      // Dispose and recreate: the only reliable way to reset a webview
-      // with retainContextWhenHidden (postMessage and HTML replacement are unreliable)
-      const viewColumn = TeacherPreviewPanel.currentPanel.panel.viewColumn;
-      TeacherPreviewPanel.currentPanel.panel.dispose();
-      // dispose() sets currentPanel = undefined, so createOrShow creates fresh panel
-      TeacherPreviewPanel.createOrShow(context, viewColumn, true);
+    const existing = TeacherPreviewPanel.currentPanel;
+    if (!existing) {
+      Logger.info('Teacher preview reload skipped: no tracked panel');
+      return;
     }
+    // Dispose and recreate: the only reliable way to reset a webview
+    // with retainContextWhenHidden (postMessage and HTML replacement are unreliable)
+    const viewColumn = existing.panel.viewColumn;
+    // onDidDispose 콜백의 발화 타이밍에 의존하지 않도록 추적을 먼저 명시적으로 끊는다
+    // (늦게 발화하면 createOrShow가 disposed 패널을 reveal하려다 no-op이 되는 경합 방지).
+    TeacherPreviewPanel.currentPanel = undefined;
+    try {
+      existing.panel.dispose();
+    } catch {
+      // 이미 dispose된 패널이어도 재생성은 계속한다
+    }
+    TeacherPreviewPanel.createOrShow(context, viewColumn, true);
+  }
+
+  /**
+   * 세션이 없을 때의 대기 화면. 뷰어 스크립트/WS 연결 없이 안내만 표시한다.
+   */
+  private getIdleHtmlContent(): string {
+    return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+  <title>Teacher Preview</title>
+  <style>
+    body {
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; margin: 0;
+      font-family: var(--vscode-font-family, sans-serif);
+      color: var(--vscode-descriptionForeground, #888);
+      background: var(--vscode-editor-background, transparent);
+      text-align: center;
+    }
+    .idle h2 { font-weight: 500; color: var(--vscode-foreground, #ccc); margin: 0 0 8px; }
+    .idle p { margin: 0; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="idle">
+    <h2>No active session</h2>
+    <p>Start Session을 누르면 자동으로 연결됩니다.</p>
+  </div>
+</body>
+</html>`;
   }
 
   private getHtmlContent(wsUrl: string): string {
@@ -280,7 +361,11 @@ export class TeacherPreviewPanel {
   }
 
   public dispose() {
-    TeacherPreviewPanel.currentPanel = undefined;
+    // 자신이 추적 중인 패널일 때만 추적을 해제한다 — reload()로 이미 새 패널이
+    // 등록된 뒤 옛 패널의 onDidDispose가 늦게 발화해 새 패널 추적을 지우는 경합 방지.
+    if (TeacherPreviewPanel.currentPanel === this) {
+      TeacherPreviewPanel.currentPanel = undefined;
+    }
     this.panel.dispose();
     while (this.disposables.length) {
       const d = this.disposables.pop();

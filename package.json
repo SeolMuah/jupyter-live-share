@@ -2,7 +2,7 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Real-time Jupyter Notebook & code file sharing for classrooms — broadcast .ipynb, .py, .md via browser and in-editor preview with drawing, polls, and chat",
-  "version": "2.2.19",
+  "version": "2.2.20",
   "publisher": "seolmuah",
   "license": "MIT",
   "keywords": [
@@ -25,6 +25,10 @@
     "type": "git",
     "url": "https://github.com/SeolMuah/jupyter-live-share"
   },
+  "bugs": {
+    "url": "https://github.com/SeolMuah/jupyter-live-share/issues",
+    "email": "seolmuah@gmail.com"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
@@ -36,7 +40,8 @@
     "onNotebook:jupyter-notebook",
     "onCommand:jupyterLiveShare.startSession",
     "onCommand:jupyterLiveShare.openViewer",
-    "onCommand:jupyterLiveShare.openTeacherPreview"
+    "onCommand:jupyterLiveShare.openTeacherPreview",
+    "onWebviewPanel:jupyterLiveShare.teacherPreview"
   ],
   "icon": "resources/jupyter_live_extension_icon.png",
   "main": "./dist/extension.js",

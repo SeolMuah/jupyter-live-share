@@ -69,8 +69,9 @@ const WsClient = (() => {
       console.log('WebSocket closed:', event.code, event.reason);
       statusHandler?.('disconnected');
 
-      // Don't reconnect on: normal close, auth failure, session full
-      if (event.code === 1000 || event.code === 4001 || event.code === 4002) return;
+      // Don't reconnect on: normal close, auth failure, session full, invalid teacher token
+      // (4003: stale/빈 교사 토큰 — 같은 토큰으로 재조인해봐야 다시 거부되므로 중단)
+      if (event.code === 1000 || event.code === 4001 || event.code === 4002 || event.code === 4003) return;
 
       _scheduleReconnect();
     };

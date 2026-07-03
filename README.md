@@ -147,6 +147,11 @@ Teachers can run real-time polls with students.
 
 This extension uses [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (`cloudflared`) for external access. On the first session start, the binary is automatically downloaded from Cloudflare's official GitHub releases and reused for subsequent sessions.
 
+## Support / 문의
+
+- 버그 제보·기능 제안: [GitHub Issues](https://github.com/SeolMuah/jupyter-live-share/issues)
+- 이메일: seolmuah@gmail.com
+
 ## License
 
 MIT

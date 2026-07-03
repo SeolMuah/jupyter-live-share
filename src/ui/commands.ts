@@ -74,6 +74,11 @@ export async function startSession(
         setImageShareEnabled(shareImages !== false);
         startWatching();
 
+        // Teacher Preview 패널이 열려있으면 새 세션으로 즉시 갱신.
+        // 터널 기동(수 초)을 기다리지 않는다 — 프리뷰는 ws://localhost로 붙으므로
+        // 여기서 바로 재생성해야 구 패널이 stale 토큰으로 남는 창이 사라진다.
+        TeacherPreviewPanel.reload(context);
+
         // 4. 터널 시작 (설정에 따라)
         let tunnelUrl = `http://localhost:${config.port}`;
 
@@ -119,10 +124,7 @@ export async function startSession(
           tunnelStatus,
         });
 
-        // Teacher Preview 패널이 열려있으면 새 세션으로 즉시 갱신
-        TeacherPreviewPanel.reload(context);
-
-        // URL 클립보드 복사
+        // URL 클립보드 복사 (학생 배포용 — 교사 토큰을 붙이지 않은 원본 URL)
         await vscode.env.clipboard.writeText(tunnelUrl);
 
         vscode.window.showInformationMessage(
@@ -130,7 +132,11 @@ export async function startSession(
           'Open in Browser'
         ).then((choice) => {
           if (choice === 'Open in Browser') {
-            vscode.env.openExternal(vscode.Uri.parse(tunnelUrl));
+            // 선생님 본인이 여는 탭 — URL 프래그먼트로 교사 토큰을 전달해
+            // teacherPanel로 조인시킨다(학생 수 미집계 + 교사 권한).
+            // 프래그먼트(#)는 서버/터널/프록시 로그에 남지 않고, 뷰어가 로드 즉시
+            // 주소창에서 제거한다. 클립보드의 학생용 URL에는 붙지 않는다.
+            vscode.env.openExternal(vscode.Uri.parse(`${tunnelUrl}#tt=${teacherToken}`));
           }
         });
 

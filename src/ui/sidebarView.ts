@@ -240,12 +240,6 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       background: color-mix(in srgb, #3fb950 26%, var(--vscode-button-secondaryBackground, #37373d));
     }
     .btn-quickpoll:disabled { opacity: 0.5; cursor: default; }
-    .quickpoll-hint {
-      font-size: 10.5px;
-      color: var(--vscode-descriptionForeground);
-      margin: 5px 2px 2px;
-      line-height: 1.4;
-    }
     .btn-small {
       padding: 4px 8px;
       width: auto;
@@ -582,8 +576,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
     <!-- Action buttons -->
     <div class="section" id="actionSection">
       <button class="btn-primary" id="btnPoll">Create Poll</button>
-      <button class="btn-quickpoll" id="btnQuickPoll" title="학생에게 '지금까지 내용 이해되셨나요?'를 즉시 질문합니다 (설정 없이 이해/아직 2택)">✓ Quick Poll</button>
-      <div class="quickpoll-hint">한 번 클릭 → 이해도 즉시 체크 (👍 이해 / 🤔 아직)</div>
+      <button class="btn-quickpoll" id="btnQuickPoll" title="학생에게 '지금까지 내용 이해되셨나요?'를 즉시 질문합니다 (설정 없이 이해/아직 2택)">✓ Quick Check Poll</button>
 
       <!-- Inline poll form -->
       <div class="poll-form" id="pollForm">

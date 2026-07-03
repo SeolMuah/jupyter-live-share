@@ -115,6 +115,10 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  // 확장호스트 재시작을 넘어온 Teacher Preview 탭 재입양 — 미등록 시 그런 탭은
+  // currentPanel 추적이 끊긴 고아가 되어 새 세션 시작에도 갱신되지 않는다.
+  context.subscriptions.push(TeacherPreviewPanel.registerSerializer(context));
+
   // StatusBar 클릭 시 URL 복사 (사이드바와 동일한 URL 상태를 재사용)
   context.subscriptions.push(
     vscode.commands.registerCommand('jupyterLiveShare.copyUrl', async () => {

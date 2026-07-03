@@ -37,9 +37,28 @@
   let hScrollProxy = null;
   let hScrollSyncing = false;
 
+  // 교사 브라우저 탭 식별: 확장이 'Open in Browser'로 열 때 URL 프래그먼트(#tt=토큰)로
+  // teacherToken을 전달한다. 이 토큰으로 teacherPanel 조인해 학생 수(viewerCount)에
+  // 집계되지 않게 한다. 주소창 노출·실수 공유를 막기 위해 URL에서 즉시 제거하고,
+  // sessionStorage(탭 전용 — 새로고침은 생존, 링크 복사로는 전파 안 됨)에 보관한다.
+  let teacherTabToken = null;
+  try {
+    const ttMatch = (location.hash || '').match(/[#&]tt=([0-9a-f]+)/);
+    if (ttMatch) {
+      teacherTabToken = ttMatch[1];
+      sessionStorage.setItem('jls-teacher-token', teacherTabToken);
+      history.replaceState(null, '', location.pathname + location.search);
+    } else {
+      teacherTabToken = sessionStorage.getItem('jls-teacher-token');
+    }
+  } catch (e) { /* sessionStorage/replaceState 불가 환경 무시 — 학생으로 동작 */ }
+
+  // 교사 토큰이 서버에서 거부(4003)된 뒤에는 재접속이 없으므로 상태 문구를 안내로 고정
+  let teacherTokenRejected = false;
+
   // Chat/Poll state
   let myNickname = '';
-  let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__;
+  let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__ || !!teacherTabToken;
   const isTeacherPreview = !!window.__TEACHER_PREVIEW__;
   let chatVisible = false;
   let unreadCount = 0;
@@ -131,7 +150,10 @@
     // Connect WebSocket (teacher preview joins as teacherPanel to avoid viewerCount increment).
     // teacherToken proves this is the trusted Teacher Preview webview, not a remote student
     // (source IP alone is unreliable once traffic passes through the Cloudflare tunnel).
-    const joinData = isTeacherPreview ? { teacherPanel: true, teacherToken: window.__TEACHER_TOKEN__ } : undefined;
+    // 교사 브라우저 탭(#tt= 프래그먼트로 열림)도 동일하게 teacherPanel로 조인해 미집계.
+    const joinData = isTeacherPreview
+      ? { teacherPanel: true, teacherToken: window.__TEACHER_TOKEN__ }
+      : (teacherTabToken ? { teacherPanel: true, teacherToken: teacherTabToken } : undefined);
     WsClient.connect(handleMessage, handleStatus, null, joinData);
 
     // Event listeners
@@ -547,6 +569,16 @@
         pinError.style.display = pinInput.value ? 'block' : 'none';
         pinInput.value = '';
         pinInput.focus();
+      } else if (data.error === 'Invalid teacher token') {
+        // 이전 세션의 stale 교사 토큰 — 폐기하고 안내만 표시.
+        // (서버가 4003으로 닫아 자동 재접속은 없다. 새 토큰은 'Open in Browser'로 다시 열면 됨)
+        try { sessionStorage.removeItem('jls-teacher-token'); } catch (e) { /* 무시 */ }
+        teacherTabToken = null;
+        teacherTokenRejected = true; // handleStatus('disconnected')가 'Reconnecting...'으로 덮어쓰지 않게
+        isTeacher = false;
+        if (btnPoll) btnPoll.style.display = 'none'; // 연결 없는 탭에 교사 UI 잔존 방지
+        statusText.textContent = '세션이 바뀌었습니다. Open in Browser로 다시 열어주세요.';
+        connectionStatus.style.display = 'block';
       } else {
         alert(data.error || 'Failed to join session');
       }
@@ -696,6 +728,9 @@
   function handleSessionEnd() {
     WsClient.disconnect();
     Drawing.destroy();
+    // 헤더의 접속자 수를 리셋한다 — 리셋하지 않으면 죽은 화면에 '이전 세션의 마지막
+    // 카운트'가 동결 표시되어, 새 세션의 실제 수(사이드바)와 어긋나 보이는 혼란을 만든다.
+    if (viewerCount) viewerCount.textContent = '0명 접속';
     notebookContainer.innerHTML = '';
     if (hScrollProxy) hScrollProxy.style.display = 'none'; // 세션 종료 시 가로 스크롤 프록시 명시적 숨김
     const endMsg = document.createElement('div');
@@ -1116,7 +1151,9 @@
 
       case 'disconnected':
         connectionStatus.style.display = 'block';
-        statusText.textContent = 'Disconnected. Reconnecting...';
+        // 교사 토큰 거부(4003)로 닫힌 경우엔 재접속하지 않으므로 'Reconnecting...'이
+        // 아닌 안내 문구를 유지한다 (join:result 핸들러가 이미 표시).
+        if (!teacherTokenRejected) statusText.textContent = 'Disconnected. Reconnecting...';
         break;
 
       case 'reconnecting':
