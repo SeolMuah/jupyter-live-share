@@ -24,6 +24,8 @@ export class TunnelManager {
   private process: ChildProcess | null = null;
   private tunnelUrl: string | null = null;
   private binDir: string;
+  // 세션 내 확정된 cloudflared 경로. start()의 재시도 루프가 버전검사/다운로드를 반복하지 않도록 캐싱.
+  private resolvedBinary: string | null = null;
 
   constructor(extensionPath: string) {
     this.binDir = path.join(extensionPath, 'bin');
@@ -35,6 +37,11 @@ export class TunnelManager {
 
   private static readonly MAX_RETRIES = 2;
   private static readonly RETRY_DELAY_MS = 2000;
+  // Cloudflare가 서버측에서 오래된 cloudflared의 quick-tunnel 생성을 거부한다("invalid UUID length: 0").
+  // 이 값은 quick-tunnel 성공이 실증된 최소 버전. cloudflared는 날짜형(YYYY.M.P)이라 숫자 비교가 성립한다.
+  // [하드코딩 리스크] Cloudflare가 하한을 다시 올리면 이 값을 올려야 하지만, 게이트가 트리거되면 항상
+  // releases/latest를 받으므로 '알려진 정상값 이상'이기만 하면 노후 바이너리는 최신으로 자가치유된다.
+  private static readonly MIN_VERSION = '2026.6.1';
 
   async start(port: number, onProgress?: (message: string) => void): Promise<string> {
     let lastError: Error | null = null;
@@ -171,70 +178,167 @@ export class TunnelManager {
   }
 
   private async ensureBinary(): Promise<string> {
+    // 세션 내 memoize: start()의 재시도 루프(MAX_RETRIES)가 버전검사/다운로드를 매번 반복
+    // 트리거하지 않도록 한 번 확정한 경로를 재사용한다 (오프라인+구버전에서 재시도마다
+    // doomed 다운로드를 반복하는 회귀 방지).
+    if (this.resolvedBinary && fs.existsSync(this.resolvedBinary)) {
+      return this.resolvedBinary;
+    }
+
     const platform = process.platform;
     const arch = process.arch;
     const key = `${platform}-${arch}`;
     const binName = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
     const binPath = path.join(this.binDir, binName);
-
-    // 1. Check if binary already exists at expected location
-    if (fs.existsSync(binPath)) {
-      return binPath;
-    }
-
-    // 2. Check for bundled binary (included in extension package)
-    const bundledBinName = BUNDLED_BINARIES[key];
-    if (bundledBinName) {
-      const bundledPath = path.join(this.binDir, bundledBinName);
-      if (fs.existsSync(bundledPath)) {
-        Logger.info(`Using bundled cloudflared for ${key}`);
-
-        // Windows: bundled binary is already named correctly
-        if (platform === 'win32') {
-          return bundledPath;
-        }
-
-        // macOS: copy bundled binary to expected name 'cloudflared'
-        fs.copyFileSync(bundledPath, binPath);
-        fs.chmodSync(binPath, 0o755);
-        Logger.info(`Copied bundled binary to ${binPath}`);
-        return binPath;
-      }
-    }
-
-    // 3. Fallback: download from GitHub
     const downloadUrl = CLOUDFLARED_URLS[key];
-    if (!downloadUrl) {
-      throw new Error(`Unsupported platform: ${key}. Please install cloudflared manually.`);
-    }
-
-    Logger.info(`Downloading cloudflared for ${key}...`);
 
     if (!fs.existsSync(this.binDir)) {
       fs.mkdirSync(this.binDir, { recursive: true });
     }
 
-    if (downloadUrl.endsWith('.tgz')) {
-      // macOS: .tgz 압축 파일 → 임시 파일로 다운로드 후 해제
-      const tgzPath = binPath + '.tgz';
-      await this.downloadFile(downloadUrl, tgzPath);
-      await this.extractTgz(tgzPath, this.binDir);
-      if (fs.existsSync(tgzPath)) fs.unlinkSync(tgzPath);
+    // 1) 다운로드 없이 '후보' 바이너리 확보 (기존 캐시 우선, 없으면 번들)
+    let candidate: string | null = null;
+    if (fs.existsSync(binPath)) {
+      candidate = binPath;
     } else {
-      await this.downloadFile(downloadUrl, binPath);
+      const bundledBinName = BUNDLED_BINARIES[key];
+      if (bundledBinName) {
+        const bundledPath = path.join(this.binDir, bundledBinName);
+        if (fs.existsSync(bundledPath)) {
+          Logger.info(`Using bundled cloudflared for ${key}`);
+          if (platform === 'win32') {
+            candidate = bundledPath; // win32: 번들 .exe는 이미 올바른 이름 → 그대로 사용(현행 보존)
+          } else {
+            // macOS: 번들을 기대 이름 'cloudflared'로 복사(현행 보존)
+            fs.copyFileSync(bundledPath, binPath);
+            fs.chmodSync(binPath, 0o755);
+            Logger.info(`Copied bundled binary to ${binPath}`);
+            candidate = binPath;
+          }
+        }
+      }
     }
 
-    if (!fs.existsSync(binPath)) {
-      throw new Error(`Failed to extract cloudflared binary to ${binPath}`);
+    // 2) 후보가 있으면 fail-safe 버전 게이트
+    if (candidate) {
+      const version = await this.getBinaryVersion(candidate);
+
+      // 버전 판별 불가(spawn 오류/타임아웃/파싱 실패) → 현행 그대로 사용(fail-safe: 절대 현행보다 나빠지지 않음)
+      if (version === null) {
+        Logger.warn('Could not determine cloudflared version; using existing binary as-is (fail-safe)');
+        this.resolvedBinary = candidate;
+        return candidate;
+      }
+
+      // 최신(>= MIN_VERSION)이면 다운로드 없이 즉시 반환(빠른 경로 보존)
+      if (this.isVersionAtLeast(version, TunnelManager.MIN_VERSION)) {
+        Logger.info(`cloudflared ${version} is up to date (>= ${TunnelManager.MIN_VERSION})`);
+        this.resolvedBinary = candidate;
+        return candidate;
+      }
+
+      // 확실히 구버전 → Cloudflare가 quick-tunnel을 거부하므로 latest로 갱신 시도
+      Logger.warn(`cloudflared ${version} is older than ${TunnelManager.MIN_VERSION}; downloading the latest build`);
+      if (downloadUrl) {
+        try {
+          // 임시 디렉터리로 받아 성공 시에만 원자적 교체 → 실패해도 후보(candidate) 훼손 없음
+          await this.downloadBinary(downloadUrl, binPath, platform);
+          Logger.info('cloudflared updated to the latest build');
+          this.resolvedBinary = binPath;
+          return binPath;
+        } catch (err) {
+          // 오프라인 등 실패 → 기존 후보로 폴백(현행보다 나빠지지 않음)
+          Logger.warn(`Update download failed (${err instanceof Error ? err.message : String(err)}); falling back to existing binary`);
+        }
+      } else {
+        Logger.warn(`No download URL for ${key}; falling back to existing binary`);
+      }
+      const fallback = fs.existsSync(candidate) ? candidate : binPath;
+      this.resolvedBinary = fallback;
+      return fallback;
     }
 
-    // Linux/macOS: 실행 권한 부여
-    if (platform !== 'win32') {
-      fs.chmodSync(binPath, 0o755);
+    // 3) 후보 자체가 없음: 반드시 다운로드(현행 동작)
+    if (!downloadUrl) {
+      throw new Error(`Unsupported platform: ${key}. Please install cloudflared manually.`);
     }
-
+    Logger.info(`Downloading cloudflared for ${key}...`);
+    await this.downloadBinary(downloadUrl, binPath, platform);
     Logger.info('cloudflared downloaded successfully');
+    this.resolvedBinary = binPath;
     return binPath;
+  }
+
+  /**
+   * URL을 binDir 하위 임시 디렉터리에 받아(.tgz면 해제) 성공 시에만 renameSync로 destPath에 원자적 배치.
+   * 실패 시 destPath(기존 바이너리)를 절대 건드리지 않는다 → 무회귀 폴백 보장.
+   * (임시 디렉터리를 binDir 하위에 두는 이유: rename이 동일 파일시스템 내 원자적 연산이 되어 EXDEV 회피)
+   */
+  private async downloadBinary(url: string, destPath: string, platform: string): Promise<void> {
+    if (!fs.existsSync(this.binDir)) {
+      fs.mkdirSync(this.binDir, { recursive: true });
+    }
+    const tmpDir = fs.mkdtempSync(path.join(this.binDir, '.dl-'));
+    try {
+      let producedPath: string;
+      if (url.endsWith('.tgz')) {
+        const tgzPath = path.join(tmpDir, 'cloudflared.tgz');
+        await this.downloadFile(url, tgzPath);
+        await this.extractTgz(tgzPath, tmpDir); // tar 내 파일명 'cloudflared'로 해제됨
+        producedPath = path.join(tmpDir, 'cloudflared');
+      } else {
+        producedPath = path.join(tmpDir, path.basename(destPath));
+        await this.downloadFile(url, producedPath);
+      }
+      if (!fs.existsSync(producedPath)) {
+        throw new Error(`Downloaded cloudflared not found at ${producedPath}`);
+      }
+      if (platform !== 'win32') {
+        fs.chmodSync(producedPath, 0o755);
+      }
+      fs.renameSync(producedPath, destPath); // 동일 파일시스템 내 원자적 교체
+      if (platform !== 'win32') {
+        fs.chmodSync(destPath, 0o755);
+      }
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
+  /** `binaryPath --version` 실행 → 'cloudflared version YYYY.M.P' 파싱. 실패/타임아웃 시 null(=판별불가). */
+  private getBinaryVersion(binaryPath: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v: string | null) => { if (!done) { done = true; resolve(v); } };
+      try {
+        const child = spawn(binaryPath, ['--version']);
+        let out = '';
+        const to = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } finish(null); }, 5000);
+        child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+        child.stderr?.on('data', (d: Buffer) => { out += d.toString(); });
+        child.on('error', () => { clearTimeout(to); finish(null); });
+        child.on('close', () => {
+          clearTimeout(to);
+          const m = out.match(/cloudflared version (\d+)\.(\d+)\.(\d+)/i);
+          finish(m ? `${m[1]}.${m[2]}.${m[3]}` : null);
+        });
+      } catch {
+        finish(null);
+      }
+    });
+  }
+
+  /** YYYY.M.P 성분별 정수 비교로 version >= minimum 판정 (예: 2026.1.2 < 2026.6.1). */
+  private isVersionAtLeast(version: string, minimum: string): boolean {
+    const a = version.split('.').map(n => parseInt(n, 10) || 0);
+    const b = minimum.split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return true; // 동일
   }
 
   private extractTgz(tgzPath: string, destDir: string): Promise<void> {
@@ -278,17 +382,16 @@ export class TunnelManager {
   private downloadFile(url: string, dest: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const follow = (currentUrl: string) => {
-        https.get(currentUrl, (response) => {
-          // 리다이렉트 처리
-          if (response.statusCode === 301 || response.statusCode === 302) {
-            const location = response.headers.location;
-            if (location) {
-              follow(location);
-              return;
-            }
+        const request = https.get(currentUrl, (response) => {
+          // 리다이렉트 처리 (301/302/307/308)
+          if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            response.resume(); // 리다이렉트 응답 본문 드레인 (소켓 누수 방지)
+            follow(response.headers.location);
+            return;
           }
 
           if (response.statusCode !== 200) {
+            response.resume();
             reject(new Error(`Download failed with status ${response.statusCode}`));
             return;
           }
@@ -300,10 +403,13 @@ export class TunnelManager {
             resolve();
           });
           file.on('error', (err) => {
-            fs.unlinkSync(dest);
+            try { fs.unlinkSync(dest); } catch { /* ignore */ }
             reject(err);
           });
-        }).on('error', reject);
+        });
+        // 무응답/방화벽 차단 시 무한 대기 방지 — 소켓 비활성 15s 상한(오프라인에서 빠른 폴백 보장)
+        request.setTimeout(15000, () => request.destroy(new Error('Download connection timed out')));
+        request.on('error', reject);
       };
 
       follow(url);
