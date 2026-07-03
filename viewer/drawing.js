@@ -56,10 +56,29 @@ const Drawing = (() => {
   // Cell position cache — built once per resize/stroke-start
   let cellPosCache = null;
 
+  // Plaintext content-top cache — 콘텐츠 텍스트박스(#document-content)의 document-space top.
+  // plaintext 판서 y를 container.scrollHeight 비율로 인코딩하면 분모가 비-콘텐츠 성분
+  // (#app-layout flex-stretch(뷰포트 의존)·::after 스페이서·padding·absolute 캔버스 오버플로)을
+  // 포함해 교사↔학생 간 달라져 문서 하단으로 갈수록 판서가 어긋난다. 대신 노트북의
+  // "셀 top + 절대 yPixel"과 대칭으로 콘텐츠 top 기준 절대 픽셀 앵커를 쓴다 — 콘텐츠는
+  // 992/960px 폭·root 16px 폰트가 모든 뷰어에 강제되어 앵커 아래 줄 위치가 결정론적이다.
+  let contentTopCache = null;
+
   // --- Cell Position Cache ---
 
   function invalidateCellCache() {
     cellPosCache = null;
+    contentTopCache = null; // 셀 캐시와 동일 라이프사이클(리사이즈/재렌더/재배치 시 함께 갱신)
+  }
+
+  function getContentTop() {
+    if (contentTopCache !== null) return contentTopCache;
+    const root = cellsDiv || container;
+    const el = root.querySelector('#document-content') || root.querySelector('.plaintext-document');
+    if (!el) return null; // plaintext 미렌더 상태 — 호출측이 yRatio 폴백
+    const cRect = container.getBoundingClientRect();
+    contentTopCache = el.getBoundingClientRect().top - cRect.top + container.scrollTop;
+    return contentTopCache;
   }
 
   function buildCellCache() {
@@ -140,7 +159,11 @@ const Drawing = (() => {
       const ch = positions[ci].height || 1;
       return { cellIndex: ci, xRatio, yRatio: yOff / ch, yPixel: yOff, _x: x, _y: absY };
     }
-    return { cellIndex: -1, xRatio, yRatio: absY / (container.scrollHeight || 1), _x: x, _y: absY };
+    // plaintext: 콘텐츠 top 기준 절대 픽셀 앵커(yPixel). yRatio는 구 뷰어/앵커 실측 실패 시 폴백용으로 유지.
+    const contentTop = getContentTop();
+    const pt = { cellIndex: -1, xRatio, yRatio: absY / (container.scrollHeight || 1), _x: x, _y: absY };
+    if (contentTop !== null) pt.yPixel = absY - contentTop;
+    return pt;
   }
 
   // Convert cell-relative point → absolute pixel (for received/stored strokes)
@@ -154,7 +177,13 @@ const Drawing = (() => {
       } else {
         y = positions[pt.cellIndex].top + pt.yRatio * (positions[pt.cellIndex].height || 1);
       }
+    } else if (pt.yPixel !== undefined) {
+      // plaintext 신규 stroke: 콘텐츠 top 앵커 복원 (scrollHeight 비-콘텐츠 성분에 면역).
+      // 앵커 실측 실패(콘텐츠 미렌더) 시에만 구 비율 방식 폴백.
+      const contentTop = getContentTop();
+      y = (contentTop !== null) ? contentTop + pt.yPixel : pt.yRatio * (container.scrollHeight || 1);
     } else {
+      // 구 stroke(yPixel 없음) 하위호환: 기존 비율 방식 그대로.
       y = pt.yRatio * (container.scrollHeight || 1);
     }
     return { x, y };
@@ -688,6 +717,9 @@ const Drawing = (() => {
     const st = container.scrollTop;
     const positions = getCellPositions();
 
+    // plaintext 앵커는 루프 밖에서 1회만 조회 (고빈도 move에서 per-point DOM read 0 유지)
+    const contentTop = positions.length > 0 ? null : getContentTop();
+
     const events = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
     for (let j = 0; j < events.length; j++) {
       const ce = events[j];
@@ -706,6 +738,9 @@ const Drawing = (() => {
       }
 
       const pt = { cellIndex, xRatio, yRatio, _x: x, _y: absY };
+      // plaintext: down점(toCoords)과 동일하게 move점 전부에 절대 앵커 부여.
+      // (누락하면 시작점만 정확하고 이동점은 비율 드리프트가 잔존한다. 노트북 분기는 기존 그대로.)
+      if (cellIndex < 0 && contentTop !== null) pt.yPixel = absY - contentTop;
       currentStroke.points.push(pt);
       currentPoints.push(pt);
     }
