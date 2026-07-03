@@ -476,6 +476,11 @@ header {
   color: #795e26;
 }
 
+/* PascalCase 호출(클래스/생성자)은 클래스/타입 색으로 (라이트) */
+.hljs-title.function_.hljs-title-type {
+  color: #267f99;
+}
+
 .hljs-variable,
 .hljs-template-variable {
   color: #001080;
@@ -567,6 +572,11 @@ header {
 [data-theme="dark"] .hljs-title.class_,
 [data-theme="dark"] .hljs-class .hljs-title {
   color: #dcdcaa;
+}
+
+/* PascalCase 호출(클래스/생성자)은 함수 노랑이 아니라 클래스/타입 청록으로 — 노랑 과다 완화 */
+[data-theme="dark"] .hljs-title.function_.hljs-title-type {
+  color: #4ec9b0;
 }
 
 [data-theme="dark"] .hljs-variable,

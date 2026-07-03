@@ -8,6 +8,23 @@ const Renderer = (() => {
   let layoutChangeCallback = null;
   let lastRenderedHash = {};
 
+  // highlight.js는 semantic 하이라이팅이 아니라 '이름(' 형태의 모든 호출을 함수(hljs-title.function_)로
+  // 태깅한다 → PascalCase 클래스/생성자(StateGraph, LumiState, HumanMessage 등)까지 함수 노랑이 되어
+  // 화면이 과하게 노래진다. VS Code Dark+는 이런 것을 청록(class/type)으로 칠하므로, 대문자로 시작하는
+  // title.function_ 토큰에 마커 클래스를 덧붙여 CSS에서 청록으로 되돌린다(소문자 메서드는 노랑 유지).
+  if (typeof hljs !== 'undefined' && typeof hljs.addPlugin === 'function') {
+    hljs.addPlugin({
+      'after:highlight': (result) => {
+        if (result && typeof result.value === 'string') {
+          result.value = result.value.replace(
+            /<span class="hljs-title function_">([A-Z][A-Za-z0-9_]*)<\/span>/g,
+            '<span class="hljs-title function_ hljs-title-type">$1</span>'
+          );
+        }
+      },
+    });
+  }
+
   // Mermaid 다이어그램 렌더링 상태
   let mermaidReady = false;
   let mermaidCounter = 0;
@@ -789,6 +806,35 @@ const Renderer = (() => {
     return -1;
   }
 
+  // 학생이 '실제로 보고 있던' 위치(최상단 가시 셀 + 그 셀의 헤더 기준 오프셋)를 디바운스로 스냅샷한다.
+  // 셀 삭제는 교사 쪽 선택/뷰포트 변경으로 인해 순간적인 scroll:sync/focus:cell 점프를 유발하는데,
+  // 그 메시지가 cells:structure 보다 '먼저' 도착할 수 있다(VS Code 이벤트 순서 미보장). 그때 점프한
+  // 위치를 handleStructureChange가 그대로 보존하면 화면이 맨 위로 튄다. 디바운스(180ms) 덕분에 그
+  // 순간 점프는 stableAnchor로 커밋되기 전이라, cells:structure 도착 시 '점프 이전(=사용자 의도)'
+  // 위치가 남아 있어 정확히 복원할 수 있다 — 메시지 도착 순서와 무관하게 동작한다.
+  let stableAnchor = null;        // { cellIndex, offset }
+  let stableAnchorTimer = null;
+  function captureStableAnchorSoon() {
+    if (stableAnchorTimer) clearTimeout(stableAnchorTimer);
+    stableAnchorTimer = setTimeout(() => {
+      stableAnchorTimer = null;
+      const container = document.getElementById('notebook-cells');
+      if (!container || container.children.length === 0) { stableAnchor = null; return; }
+      const idx = getTopmostVisibleCellIndex();
+      if (idx < 0) { stableAnchor = null; return; }
+      const cellEl = container.children[idx];
+      if (!cellEl) return;
+      const headerHeight = document.getElementById('header')?.offsetHeight || 48;
+      stableAnchor = { cellIndex: idx, offset: cellEl.getBoundingClientRect().top - headerHeight };
+    }, 180);
+  }
+  // 스크롤(사용자·프로그램 무관)이 잦아들면 위치를 스냅샷. 이 리스너는 위치를 읽기만 하고 스크롤을
+  // 유발하지 않으므로 프리뷰 에코/커서 억제와 상호작용하지 않는다. (plaintext 모드에선 notebook-cells가
+  // 없어 stableAnchor=null → 무해). window·document 둘 다 등록 — VS Code 웹뷰(iframe)에선 window
+  // scroll이 안 뜰 수 있어 프리뷰 패리티를 위해 document에도 붙인다(디바운스가 중복 호출을 합침).
+  window.addEventListener('scroll', captureStableAnchorSoon, { passive: true });
+  document.addEventListener('scroll', captureStableAnchorSoon, { passive: true });
+
   /**
    * Scroll notebook to a cell-relative anchor position.
    * cellIndex + offsetRatio(화면 크기 독립)로 위치를 잡는다.
@@ -856,9 +902,38 @@ const Renderer = (() => {
       return;
     }
 
-    // 증분 성공: 앵커 셀이 살아남았으면 화면상 같은 위치를 유지하도록 보정.
-    // (브라우저 자체 스크롤 앵커링이 이미 보정한 경우 delta=0이라 no-op.
-    //  앵커 셀 자체가 삭제된 경우엔 보정 없이 자연 흐름에 맡긴다 — 아래 내용이 올라와 채워짐.)
+    // 증분 성공.
+    // stableAnchor.cellIndex를 '이번 구조 변경'에 맞춰 먼저 결정적으로 갱신한다. 스크롤 이벤트에만
+    // 의존하면 디바운스(180ms) 안에 연속 삭제/삽입이 오는 churn에서 인덱스가 낡아 한 칸씩 밀린다
+    // → 변경량만큼 직접 추종시켜 방지한다. (앵커 셀 자체가 삭제되면 '바로 윗 블록'으로 = 사용자 요청)
+    let restoreIdx = -1;
+    if (stableAnchor) {
+      if (change.type === 'delete') {
+        const removed = change.removedCount || 1;
+        if (change.index + removed <= stableAnchor.cellIndex) stableAnchor.cellIndex -= removed;   // 삭제 구간 아래
+        else if (change.index <= stableAnchor.cellIndex) stableAnchor.cellIndex = change.index - 1; // 앵커 자체 삭제 → 바로 윗 블록
+        // (change.index > cellIndex: 위쪽 삭제 → 불변)
+        restoreIdx = stableAnchor.cellIndex; // 삭제일 때만 stableAnchor로 복원(순간 점프 오염 방지)
+      } else if (change.type === 'insert') {
+        const added = (change.addedCells && change.addedCells.length) || 0;
+        if (change.index <= stableAnchor.cellIndex) stableAnchor.cellIndex += added;
+        // insert 복원은 2순위(순간 앵커)에 맡긴다 — 브라우저 스크롤 앵커링이 이미 보정하는 경우가 많음.
+      }
+      if (stableAnchor.cellIndex < 0) stableAnchor.cellIndex = 0;
+      if (stableAnchor.cellIndex > container.children.length - 1) stableAnchor.cellIndex = container.children.length - 1;
+    }
+
+    // 1순위 — 삭제: stableAnchor로 '사용자 의도' 위치 복원 (도착 순서 무관, 맨위 튐 방지).
+    if (restoreIdx >= 0) {
+      const cellEl = container.children[restoreIdx];
+      if (cellEl) {
+        const delta = (cellEl.getBoundingClientRect().top - headerHeight) - stableAnchor.offset;
+        if (Math.abs(delta) > 1) window.scrollBy(0, delta);
+        return;
+      }
+    }
+    // 2순위 — 순간 앵커(기존 방식): insert이거나 stableAnchor 없음(스크롤 이력 없음).
+    // 앵커 셀이 살아남았으면 화면상 같은 위치를 유지하도록 보정한다.
     if (anchorEl && anchorEl.isConnected) {
       const delta = anchorEl.getBoundingClientRect().top - anchorTop;
       if (delta) window.scrollBy(0, delta);
