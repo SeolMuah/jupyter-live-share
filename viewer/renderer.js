@@ -1429,6 +1429,12 @@ const Renderer = (() => {
     cursorElement.style.left = `${cursorLeft}px`;
     cursorElement.style.height = `${lineHeight}px`;
 
+    // ★ '선생님' 라벨(::after)은 기본적으로 커서 위(bottom:100%)에 뜬다. 코드/마크다운 블록의
+    //   맨 윗줄(cursorTop≈0)이면 라벨이 블록 상단 밖으로 넘쳐 잘린다 → 위 공간이 라벨 높이보다
+    //   작으면 라벨을 커서 '아래'로 뒤집어(label-below) 잘림을 없앤다.
+    const LABEL_H = 18; // ::after 라벨 대략 높이(line-height 16 + 여유)
+    if (cursorTop < LABEL_H) cursorElement.classList.add('label-below');
+
     codeEl.appendChild(cursorElement);
 
     // Handle selection highlight (노란 배경)

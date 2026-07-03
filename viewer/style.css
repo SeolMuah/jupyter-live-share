@@ -1595,6 +1595,13 @@ footer label {
   letter-spacing: 0.02em;
 }
 
+/* 맨 윗줄 등 위 공간이 부족할 때: 라벨을 커서 '아래'로 뒤집어 상단 잘림 방지 */
+.teacher-cursor.label-below::after {
+  bottom: auto;
+  top: 100%;
+  border-radius: 0 3px 3px 3px;
+}
+
 @keyframes cursor-blink {
   0%, 40% { opacity: 1; }
   50%, 90% { opacity: 0; }
