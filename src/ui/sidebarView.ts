@@ -229,6 +229,23 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
     .btn-secondary:hover {
       background: var(--vscode-button-secondaryHoverBackground);
     }
+    /* Quick Poll: 이해도 즉시 체크 — 초록 틴트로 Create Poll과 구분 */
+    .btn-quickpoll {
+      background: color-mix(in srgb, #3fb950 15%, var(--vscode-button-secondaryBackground, #37373d));
+      color: var(--vscode-button-secondaryForeground, #cccccc);
+      border: 1px solid color-mix(in srgb, #3fb950 42%, transparent);
+      margin-top: 6px;
+    }
+    .btn-quickpoll:hover:not(:disabled) {
+      background: color-mix(in srgb, #3fb950 26%, var(--vscode-button-secondaryBackground, #37373d));
+    }
+    .btn-quickpoll:disabled { opacity: 0.5; cursor: default; }
+    .quickpoll-hint {
+      font-size: 10.5px;
+      color: var(--vscode-descriptionForeground);
+      margin: 5px 2px 2px;
+      line-height: 1.4;
+    }
     .btn-small {
       padding: 4px 8px;
       width: auto;
@@ -565,6 +582,8 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
     <!-- Action buttons -->
     <div class="section" id="actionSection">
       <button class="btn-primary" id="btnPoll">Create Poll</button>
+      <button class="btn-quickpoll" id="btnQuickPoll" title="학생에게 '지금까지 내용 이해되셨나요?'를 즉시 질문합니다 (설정 없이 이해/아직 2택)">✓ Quick Poll</button>
+      <div class="quickpoll-hint">한 번 클릭 → 이해도 즉시 체크 (👍 이해 / 🤔 아직)</div>
 
       <!-- Inline poll form -->
       <div class="poll-form" id="pollForm">
@@ -624,6 +643,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
       const btnStart = document.getElementById('btnStart');
       const btnStop = document.getElementById('btnStop');
       const btnPoll = document.getElementById('btnPoll');
+      const btnQuickPoll = document.getElementById('btnQuickPoll');
       const pollForm = document.getElementById('pollForm');
       const btnPollCancel = document.getElementById('btnPollCancel');
       const btnPollStart = document.getElementById('btnPollStart');
@@ -693,6 +713,23 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         if (pollForm.classList.contains('visible')) {
           pollQuestion.focus();
         }
+      });
+
+      // Quick Poll: 설정 없이 즉시 '이해도 체크' 프리셋 폴 시작 (기존 poll:start 엔진 재사용)
+      btnQuickPoll.addEventListener('click', () => {
+        if (pollActive) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          addSystemMessage('WebSocket not connected. Cannot create poll.');
+          return;
+        }
+        pollForm.classList.remove('visible');
+        const pollId = Date.now().toString();
+        ws.send(JSON.stringify({ type: 'poll:start', data: {
+          question: '지금까지 내용, 이해되셨나요?',
+          optionCount: 2,
+          options: ['👍 네, 이해했어요', '🤔 아직 잘 모르겠어요'],
+          pollId,
+        } }));
       });
 
       // Poll mode toggle
@@ -933,6 +970,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         currentPollOptions = data.options || null;
         btnPoll.textContent = 'Poll Active';
         btnPoll.disabled = true;
+        if (btnQuickPoll) btnQuickPoll.disabled = true;
         pollActiveQuestion.textContent = data.question;
         pollResultsMini.textContent = 'Votes: 0';
         pollActiveBar.classList.add('visible');
@@ -1016,6 +1054,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
         pollActive = false;
         btnPoll.textContent = 'Create Poll';
         btnPoll.disabled = false;
+        if (btnQuickPoll) btnQuickPoll.disabled = false;
         pollActiveBar.classList.remove('visible');
 
         // Update chat poll card with final results
@@ -1081,6 +1120,7 @@ export class SessionViewProvider implements vscode.WebviewViewProvider {
             pollActive = false;
             btnPoll.textContent = 'Create Poll';
             btnPoll.disabled = false;
+            if (btnQuickPoll) btnQuickPoll.disabled = false;
             pollActiveBar.classList.remove('visible');
             pollForm.classList.remove('visible');
             // Clear chat

@@ -2,7 +2,7 @@
   "name": "jupyter-live-share",
   "displayName": "Jupyter Live Share",
   "description": "Real-time Jupyter Notebook & code file sharing for classrooms — broadcast .ipynb, .py, .md via browser and in-editor preview with drawing, polls, and chat",
-  "version": "2.2.18",
+  "version": "2.2.19",
   "publisher": "seolmuah",
   "license": "MIT",
   "keywords": [
