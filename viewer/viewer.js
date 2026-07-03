@@ -24,6 +24,14 @@
   let lastProgrammaticScrollTime = 0;
   const PROGRAMMATIC_SCROLL_SUPPRESS_MS = 250;
 
+  // 셀 추가/삭제(cells:structure) 직후 억제창. 셀을 지우면 교사 쪽 선택/뷰포트가 바뀌어
+  // 서버가 focus:cell·scroll:sync를 연달아 보내는데, 그 auto-scroll이 handleStructureChange가
+  // 이미 보존해 둔 앵커 위치를 덮어써 학생 화면이 맨 위로 튄다(특히 상단 마크다운 셀 삭제 시).
+  // 이 창 동안은 파생 focus/scroll의 '스크롤'만 억제한다(활성 셀 하이라이트는 계속 갱신).
+  // 창 밖의 '의도적 셀 클릭' 추종은 그대로 동작한다.
+  let lastStructureChangeTime = 0;
+  const STRUCTURE_SETTLE_MS = 400;
+
   // 가로 스크롤 프록시 상태 — init()이 로드 직후 실행되며 toggleChat→updateHScrollProxy에서
   // 즉시 참조하므로 반드시 상단에 선언(TDZ 방지). 아래 함수 정의부에서 사용.
   let hScrollProxy = null;
@@ -429,9 +437,12 @@
 
       case 'focus:cell':
         if (documentType === 'notebook') {
-          // focus:cell fires on deliberate cell click — all viewers (including teacher preview) should follow
-          Renderer.setActiveCell(msg.data.cellIndex);
-          lastCursorScrollTime = Date.now();  // 셀 클릭 직후 휠 스크롤 동기화보다 우선
+          // focus:cell fires on deliberate cell click — all viewers (including teacher preview) should follow.
+          // 단, 셀 추가/삭제 직후 파생된 focus:cell은 구조 변경의 부수효과이므로 스크롤을 억제한다
+          // (handleStructureChange가 이미 앵커로 위치를 보존함). 활성 셀 하이라이트는 그대로 갱신.
+          const structureSettling = (Date.now() - lastStructureChangeTime) < STRUCTURE_SETTLE_MS;
+          Renderer.setActiveCell(msg.data.cellIndex, structureSettling);
+          if (!structureSettling) lastCursorScrollTime = Date.now();  // 셀 클릭 직후 휠 스크롤 동기화보다 우선
         }
         break;
 
@@ -676,6 +687,9 @@
       notebookCells.splice(data.index, data.removedCount || 1);
     }
     Renderer.handleStructureChange(data, notebookCells);
+    // 이 시점 이후 짧게, 삭제/삽입이 유발하는 파생 focus:cell·scroll:sync의 auto-scroll을 억제해
+    // handleStructureChange가 보존한 앵커 위치가 덮어써지지(맨 위로 튐) 않도록 한다.
+    lastStructureChangeTime = Date.now();
     Drawing.invalidateCellCache(); // cells added/removed changes all positions
   }
 
@@ -708,6 +722,9 @@
 
     // 커서 스크롤 우선 (300ms 이내 cursor:position이 있었으면 무시)
     if (Date.now() - lastCursorScrollTime < CURSOR_SCROLL_PRIORITY_MS) return;
+
+    // 구조 변경 직후 파생된 scroll:sync(뷰포트 변동)도 억제 — 앵커 보존을 덮어써 튐 유발.
+    if (Date.now() - lastStructureChangeTime < STRUCTURE_SETTLE_MS) return;
 
     if (data.type === 'notebook' && documentType === 'notebook') {
       const scrolled = Renderer.scrollToNotebookAnchor(data.cellIndex, data.offsetRatio);
