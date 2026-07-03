@@ -164,10 +164,14 @@ function registerProcessCleanupHandlers(): void {
     emergencyCleanup();
   });
 
-  // 처리되지 않은 예외로 인한 종료
+  // 처리되지 않은 예외: 절대로 세션을 강제 종료하지 않는다 (로그만).
+  // uncaughtException은 프로세스를 종료시키지 않는다. 여기서 emergencyCleanup()으로
+  // 터널/WS/HTTP를 내리면, '아무' 예외(우리 코드·타 확장·VS Code 내부 무관)가 한 번만
+  // 튀어도 학생·교사에게 session:end가 나가고 서버가 사라져 재접속이 불가한데 사이드바는
+  // 'running'으로 남아 좀비 세션이 된다(실측 재현됨). 실제 종료 시 자원 해제는 아래
+  // process 'exit' 핸들러가 담당하므로, 여기서는 진단용 로깅만 하고 세션을 그대로 둔다.
   process.on('uncaughtException', (err) => {
-    Logger.error('Uncaught exception, cleaning up...', err);
-    emergencyCleanup();
+    Logger.error('Uncaught exception (session left intact — no teardown)', err);
   });
 }
 

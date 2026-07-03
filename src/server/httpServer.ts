@@ -192,6 +192,9 @@ export function startHttpServer(port: number): Promise<http.Server> {
     // 활성 연결 추적 (강제 종료 시 즉시 정리 가능하도록)
     server.on('connection', (socket: net.Socket) => {
       activeConnections.add(socket);
+      // 터널 뒤 학생 연결은 갑자기 끊기며(ECONNRESET/EPIPE) raw 소켓 error를 낸다.
+      // 리스너가 없으면 프로세스 uncaughtException으로 번질 수 있으므로 명시적으로 흡수한다.
+      socket.on('error', () => { /* 원격 급단절 흡수 */ });
       socket.on('close', () => {
         activeConnections.delete(socket);
       });
@@ -209,6 +212,7 @@ export function startHttpServer(port: number): Promise<http.Server> {
             server = http.createServer(app!);
             server.on('connection', (socket: net.Socket) => {
               activeConnections.add(socket);
+              socket.on('error', () => { /* 원격 급단절 흡수 */ });
               socket.on('close', () => {
                 activeConnections.delete(socket);
               });

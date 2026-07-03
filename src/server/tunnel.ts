@@ -110,6 +110,10 @@ export class TunnelManager {
         clearTimeout(timeout);
         cleanup();
         if (success) {
+          // cleanup()이 startup용 리스너를 모두 떼므로, 이후 살아있는 cloudflared가 죽거나
+          // stdio가 error를 내면 리스너 부재로 프로세스 uncaughtException이 될 수 있다.
+          // 수명 동안 유지되는 경량 핸들러로 흡수·로깅한다 (세션/서버는 건드리지 않음).
+          if (this.process) this.attachLifetimeHandlers(this.process);
           resolve(value as string);
         } else {
           reject(value as Error);
@@ -161,6 +165,30 @@ export class TunnelManager {
       };
       this.process.on('error', errorHandler);
     });
+  }
+
+  /**
+   * URL 확보 후(=start 성공) 프로세스 수명 동안 유지되는 경량 이벤트 핸들러를 붙인다.
+   * 목적: cloudflared가 세션 중 스스로 죽거나 stdio가 error를 낼 때 리스너 부재로 인한
+   * 프로세스 uncaughtException을 방지하고(→ 확장이 세션 전체를 내리는 회귀 차단), 터널
+   * 다운을 로그로 진단 가능하게 남긴다. 우리가 stop()으로 죽인 경우엔 조용히 무시한다.
+   */
+  private attachLifetimeHandlers(proc: ChildProcess): void {
+    proc.on('error', (err: Error) => {
+      if (this.process === proc) Logger.error('cloudflared process error (post-start)', err);
+    });
+    proc.on('exit', (code: number | null) => {
+      // stop()은 this.process를 먼저 null로 만들므로, 의도적 종료는 여기서 걸러진다.
+      if (this.process === proc) {
+        Logger.warn(`cloudflared exited unexpectedly (code ${code}) — tunnel is down`);
+        this.tunnelUrl = null;
+      }
+    });
+    // 남은 stdio는 계속 흘려보내고(버퍼 정체 방지), 스트림 error도 흡수한다.
+    proc.stdout?.on('error', () => { /* ignore */ });
+    proc.stderr?.on('error', () => { /* ignore */ });
+    proc.stdout?.resume();
+    proc.stderr?.resume();
   }
 
   stop() {

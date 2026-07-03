@@ -563,13 +563,20 @@ export function startWsServer(
   heartbeatInterval = setInterval(() => {
     if (!wss) return;
     wss.clients.forEach((client) => {
-      const withAlive = client as WebSocket & { isAlive?: boolean };
-      if (withAlive.isAlive === false) {
-        client.terminate();
-        return;
+      // setInterval 콜백은 VS Code가 감싸주지 않으므로, 여기서 throw가 새면 프로세스
+      // uncaughtException이 된다. 소켓 하나의 ping/terminate 실패가 세션을 위협하지
+      // 않도록 개별 격리한다 (ping은 OPEN 상태에서만 호출).
+      try {
+        const withAlive = client as WebSocket & { isAlive?: boolean };
+        if (withAlive.isAlive === false) {
+          client.terminate();
+          return;
+        }
+        withAlive.isAlive = false;
+        if (client.readyState === WebSocket.OPEN) client.ping();
+      } catch (err) {
+        Logger.error('heartbeat ping/terminate failed', err);
       }
-      withAlive.isAlive = false;
-      client.ping();
     });
   }, HEARTBEAT_INTERVAL_MS);
 

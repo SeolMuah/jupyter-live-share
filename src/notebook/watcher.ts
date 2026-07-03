@@ -56,6 +56,20 @@ function invalidateNotebookFullCache(): void {
   cachedNotebookFull = null;
 }
 
+/**
+ * setTimeout/스로틀 콜백 전용 안전 실행기. VS Code는 자신의 이벤트 리스너에서 나는 예외는
+ * 감싸주지만, 그 리스너가 예약한 setTimeout 콜백은 감싸주지 않는다 → 여기서 throw가 새면
+ * 프로세스 uncaughtException이 되어 (확장의 핸들러를 통해) 세션 전체가 내려갈 수 있다.
+ * 직렬화/이미지 해석/브로드캐스트 중 한 번의 실패가 세션을 죽이지 않도록 격리·로깅한다.
+ */
+function runSafely(label: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    Logger.error(`[watcher] ${label} failed`, err);
+  }
+}
+
 export function setImageShareEnabled(enabled: boolean) {
   imageShareEnabled = enabled;
 }
@@ -176,7 +190,7 @@ function broadcastViewportScroll(data: unknown) {
   const send = () => { lastViewportTime = Date.now(); setLastScrollSync(data); broadcast('scroll:sync', data); };
   if (since < VIEWPORT_THROTTLE_MS) {
     if (viewportTrailingTimer) clearTimeout(viewportTrailingTimer);
-    viewportTrailingTimer = setTimeout(() => { viewportTrailingTimer = null; send(); }, VIEWPORT_THROTTLE_MS - since);
+    viewportTrailingTimer = setTimeout(() => { viewportTrailingTimer = null; runSafely('viewport scroll trailing', send); }, VIEWPORT_THROTTLE_MS - since);
     return;
   }
   send();
@@ -280,7 +294,7 @@ function throttleCellOutput(cellIndex: number) {
     if (existing) clearTimeout(existing);
     outputTrailingTimers.set(cellIndex, setTimeout(() => {
       outputTrailingTimers.delete(cellIndex);
-      sendCellOutput(cellIndex);
+      runSafely('cell:output trailing', () => sendCellOutput(cellIndex));
     }, OUTPUT_THROTTLE_MS - since));
     return;
   }
@@ -594,7 +608,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
           const existing = debounceTimers.get(cellIndex);
           if (existing) clearTimeout(existing);
           const timer = setTimeout(() => {
-            flushCellUpdate(cellIndex);
+            runSafely('cell:update debounce flush', () => flushCellUpdate(cellIndex));
           }, CELL_UPDATE_DEBOUNCE_MS);
           debounceTimers.set(cellIndex, timer);
         }
@@ -737,21 +751,23 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       if (syncBackupTimer) clearTimeout(syncBackupTimer);
       syncBackupTimer = setTimeout(() => {
         syncBackupTimer = null;
-        if (!currentNotebook) return;
-        if (capturedCellIndex < 0 || capturedCellIndex >= currentNotebook.cellCount) return;
-        const cell = currentNotebook.cellAt(capturedCellIndex);
-        const currentText = cell.document.getText();
-        const lastSent = lastSentSources.get(capturedCellIndex) ?? '';
-        if (currentText !== lastSent) {
-          lastSentSources.set(capturedCellIndex, currentText);
-          if (SYNC_DEBUG) Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
-          // Resolve images in markup cells (cache-only for real-time)
-          const isMarkupCell = cell.kind === vscode.NotebookCellKind.Markup;
-          const resolvedText = (imageShareEnabled && isMarkupCell)
-            ? resolveLocalImagesCacheOnly(currentText, getBaseDir())
-            : currentText;
-          broadcast('cell:update', { index: capturedCellIndex, source: resolvedText });
-        }
+        runSafely('cell:update IME backup', () => {
+          if (!currentNotebook) return;
+          if (capturedCellIndex < 0 || capturedCellIndex >= currentNotebook.cellCount) return;
+          const cell = currentNotebook.cellAt(capturedCellIndex);
+          const currentText = cell.document.getText();
+          const lastSent = lastSentSources.get(capturedCellIndex) ?? '';
+          if (currentText !== lastSent) {
+            lastSentSources.set(capturedCellIndex, currentText);
+            if (SYNC_DEBUG) Logger.info(`[SYNC-BACKUP] cell:update idx=${capturedCellIndex} len=${currentText.length} (IME fallback)`);
+            // Resolve images in markup cells (cache-only for real-time)
+            const isMarkupCell = cell.kind === vscode.NotebookCellKind.Markup;
+            const resolvedText = (imageShareEnabled && isMarkupCell)
+              ? resolveLocalImagesCacheOnly(currentText, getBaseDir())
+              : currentText;
+            broadcast('cell:update', { index: capturedCellIndex, source: resolvedText });
+          }
+        });
       }, 50);
 
       // 커서 위치만 전송 → throttle 적용
@@ -764,7 +780,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
         cursorTrailingTimer = setTimeout(() => {
           cursorTrailingTimer = null;
           lastCursorTime = Date.now();
-          broadcast('cursor:position', payload);
+          runSafely('cursor:position trailing', () => broadcast('cursor:position', payload));
         }, CURSOR_THROTTLE_MS - timeSinceLast);
         return;
       }
@@ -842,13 +858,15 @@ function setupTextDocumentWatcher() {
     // debounce
     if (textDebounceTimer) clearTimeout(textDebounceTimer);
     textDebounceTimer = setTimeout(() => {
-      let content = event.document.getText();
-      // Only resolve images for markdown/html documents (cache-only for real-time typing)
-      if (isImageRelevantTextDocument()) {
-        content = resolveTextImagesRealtime(content, getBaseDir());
-      }
-      broadcast('document:update', { content });
       textDebounceTimer = null;
+      runSafely('document:update debounce', () => {
+        let content = event.document.getText();
+        // Only resolve images for markdown/html documents (cache-only for real-time typing)
+        if (isImageRelevantTextDocument()) {
+          content = resolveTextImagesRealtime(content, getBaseDir());
+        }
+        broadcast('document:update', { content });
+      });
     }, TEXT_DEBOUNCE_MS);
   });
 
@@ -910,7 +928,7 @@ function setupTextDocumentWatcher() {
       cursorTrailingTimer = setTimeout(() => {
         cursorTrailingTimer = null;
         lastCursorTime = Date.now();
-        broadcast('cursor:position', payload);
+        runSafely('cursor:position trailing', () => broadcast('cursor:position', payload));
       }, CURSOR_THROTTLE_MS - timeSinceLast);
       return;
     }
