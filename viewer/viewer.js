@@ -60,6 +60,7 @@
   let myNickname = '';
   let isTeacher = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !!window.__TEACHER_PREVIEW__ || !!teacherTabToken;
   const isTeacherPreview = !!window.__TEACHER_PREVIEW__;
+  let teacherTokenPollTimer = null; // Teacher Preview 자기 치유: 확장에 토큰을 주기적으로 요청
   let chatVisible = false;
   let unreadCount = 0;
   let currentPollId = null;
@@ -151,10 +152,13 @@
     // teacherToken proves this is the trusted Teacher Preview webview, not a remote student
     // (source IP alone is unreliable once traffic passes through the Cloudflare tunnel).
     // 교사 브라우저 탭(#tt= 프래그먼트로 열림)도 동일하게 teacherPanel로 조인해 미집계.
-    const joinData = isTeacherPreview
-      ? { teacherPanel: true, teacherToken: window.__TEACHER_TOKEN__ }
-      : (teacherTabToken ? { teacherPanel: true, teacherToken: teacherTabToken } : undefined);
-    WsClient.connect(handleMessage, handleStatus, null, joinData);
+    // 학생/브라우저 탭은 여기서 바로 연결한다.
+    // Teacher Preview의 연결 시작은 Drawing.init 이후로 미룬다(아래) — connectTeacherPreview가
+    // 재연결 시 Drawing을 재초기화하는데, 여기서 먼저 연결하면 Drawing.init이 이중 실행된다.
+    if (!isTeacherPreview) {
+      const joinData = teacherTabToken ? { teacherPanel: true, teacherToken: teacherTabToken } : undefined;
+      WsClient.connect(handleMessage, handleStatus, null, joinData);
+    }
 
     // Event listeners
     themeToggle.addEventListener('click', toggleTheme);
@@ -246,6 +250,13 @@
     // Drawing module initialization
     Drawing.init(isTeacherPreview);
 
+    // Teacher Preview는 확장에서 현재 세션 토큰을 받아 연결한다(자기 치유). Drawing.init 이후에
+    // 시작해 connectTeacherPreview의 재초기화와 이중 init이 겹치지 않게 한다. 세션이 없으면
+    // 빈 토큰으로 join해 거부(4003)당하는 대신, 세션이 생길 때까지 확장에 주기적으로 토큰을
+    // 물어본다. 패널이 reload로 재생성되지 못한 상태(고아)여도 세션이 뜨는 즉시 스스로 연결되고,
+    // 세션이 재시작돼 토큰이 바뀌어도 새 토큰으로 자동 재연결된다.
+    if (isTeacherPreview) startTeacherPreviewConnect();
+
     // When cursor removal restores markup (raw→rendered), cell heights change —
     // redraw all drawing strokes at new positions.
     // Debounce via rAF so layout is fully settled before reading cell positions.
@@ -259,6 +270,13 @@
     if (isVSCodeWebview) {
       window.addEventListener('message', (event) => {
         const msg = event.data;
+        // Teacher Preview: 확장이 알려준 현재 세션 토큰으로 (재)연결
+        if (msg && msg.type === 'teacherToken') {
+          if (isTeacherPreview && msg.hasSession && msg.token && !WsClient.isConnected()) {
+            connectTeacherPreview(msg.token, msg.wsUrl);
+          }
+          return;
+        }
         if (msg && msg.type === 'sessionReady') {
           // New session started — reset UI state, re-init Drawing, reconnect WS
           notebookContainer.innerHTML = '';
@@ -425,6 +443,44 @@
     nameInput.focus();
   }
 
+  // === Teacher Preview 자기 치유 연결 ===
+
+  // 확장에 현재 세션 토큰을 요청한다 (확장은 'teacherToken' 메시지로 응답).
+  function requestTeacherToken() {
+    if (vscodeApi) vscodeApi.postMessage({ type: 'requestTeacherToken' });
+  }
+
+  // 받은 토큰으로 teacherPanel 연결. 이미 연결됐거나 연결 중이면 건드리지 않는다
+  // (연결 중 재진입 시 in-flight 소켓을 끊고 다시 여는 churn 방지).
+  function connectTeacherPreview(token, wsUrl) {
+    if (!token) return;
+    window.__TEACHER_TOKEN__ = token;
+    if (wsUrl) window.__WS_URL__ = wsUrl;
+    if (WsClient.isConnected() || WsClient.isConnecting()) return;
+    // 세션 종료(handleSessionEnd)로 Drawing이 destroy된 상태일 수 있으므로 재연결 시 재초기화한다.
+    // (Drawing.init 이후에만 이 함수가 호출되므로 destroy→init 순서로 캔버스 중복 없이 재생성.)
+    Drawing.destroy();
+    Drawing.init(isTeacherPreview);
+    WsClient.disconnect();
+    WsClient.connect(handleMessage, handleStatus, null, { teacherPanel: true, teacherToken: token });
+  }
+
+  // 패널 생성 시 세션이 이미 있었으면(baked 토큰) 즉시 연결하고, 어느 경우든 연결이
+  // 끊겨 있는 동안 확장에 토큰을 주기적으로 물어봐 세션이 뜨는 즉시 자동 연결한다.
+  function startTeacherPreviewConnect() {
+    if (window.__TEACHER_TOKEN__) {
+      connectTeacherPreview(window.__TEACHER_TOKEN__, window.__WS_URL__);
+    } else {
+      connectionStatus.style.display = 'block';
+      statusText.textContent = '세션 대기 중...';
+    }
+    requestTeacherToken();
+    if (teacherTokenPollTimer) clearInterval(teacherTokenPollTimer);
+    teacherTokenPollTimer = setInterval(() => {
+      if (!WsClient.isConnected()) requestTeacherToken();
+    }, 3000);
+  }
+
   // === WebSocket Message Handler ===
 
   function handleMessage(msg) {
@@ -569,8 +625,13 @@
         pinError.style.display = pinInput.value ? 'block' : 'none';
         pinInput.value = '';
         pinInput.focus();
+      } else if (data.error === 'Invalid teacher token' && isTeacherPreview) {
+        // Teacher Preview는 stale 토큰으로 거부돼도 폴링이 새 토큰을 받아 자동 재연결하므로
+        // 포기하지 않고 대기 상태만 표시한다.
+        statusText.textContent = '세션 대기 중...';
+        connectionStatus.style.display = 'block';
       } else if (data.error === 'Invalid teacher token') {
-        // 이전 세션의 stale 교사 토큰 — 폐기하고 안내만 표시.
+        // (브라우저 탭) 이전 세션의 stale 교사 토큰 — 폐기하고 안내만 표시.
         // (서버가 4003으로 닫아 자동 재접속은 없다. 새 토큰은 'Open in Browser'로 다시 열면 됨)
         try { sessionStorage.removeItem('jls-teacher-token'); } catch (e) { /* 무시 */ }
         teacherTabToken = null;
@@ -1153,12 +1214,16 @@
         connectionStatus.style.display = 'block';
         // 교사 토큰 거부(4003)로 닫힌 경우엔 재접속하지 않으므로 'Reconnecting...'이
         // 아닌 안내 문구를 유지한다 (join:result 핸들러가 이미 표시).
-        if (!teacherTokenRejected) statusText.textContent = 'Disconnected. Reconnecting...';
+        // Teacher Preview는 WsClient 자동 재연결이 아니라 토큰 폴링으로 복구하므로
+        // 'Reconnecting...' 대신 '세션 대기 중'을 표시한다(오해 방지).
+        if (isTeacherPreview) statusText.textContent = '세션 대기 중...';
+        else if (!teacherTokenRejected) statusText.textContent = 'Disconnected. Reconnecting...';
         break;
 
       case 'reconnecting':
         connectionStatus.style.display = 'block';
-        statusText.textContent = 'Reconnecting...';
+        if (isTeacherPreview) statusText.textContent = '세션 대기 중...';
+        else statusText.textContent = 'Reconnecting...';
         break;
     }
   }

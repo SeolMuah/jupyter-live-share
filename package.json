@@ -2,7 +2,7 @@
   "name": "code-class-live-sharing",
   "displayName": "Code Class Live Sharing",
   "description": "Real-time classroom sharing for code files and Jupyter notebooks — students follow .ipynb, .py, .md in their browser, with drawing, polls, and chat",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "codeclasslive",
   "license": "MIT",
   "keywords": [

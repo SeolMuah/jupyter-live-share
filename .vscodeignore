@@ -36,3 +36,9 @@ resources/icon_128.png
 dist/**/*.d.ts
 # 테스트/검증용 스크래치 하네스 파일 (__ 접두사) — 절대 배포 금지
 **/__*
+
+# 테스트 픽스처 (배포 제외)
+test.ipynb
+test.py
+test/**
+scratchpad/**

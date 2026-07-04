@@ -126,6 +126,10 @@ const WsClient = (() => {
     return ws && ws.readyState === WebSocket.OPEN;
   }
 
+  function isConnecting() {
+    return ws && ws.readyState === WebSocket.CONNECTING;
+  }
+
   function send(type, data) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type, data }));
@@ -136,6 +140,7 @@ const WsClient = (() => {
     disconnect,
     reconnect,
     isConnected,
+    isConnecting,
     send,
   };
 })();

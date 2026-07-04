@@ -18,22 +18,33 @@ export class TeacherPreviewPanel {
 
     this.refreshHtml();
 
+    // 웹뷰(Teacher Preview)가 현재 세션 토큰을 물어오면 라이브 값으로 응답한다.
+    // 이 핸들러는 '전역' 세션 상태(getTeacherToken)를 읽으므로, 이 패널이 reload로
+    // 재생성되지 못한 상태(고아)여도 세션이 뜨는 즉시 웹뷰가 스스로 연결된다(자기 치유).
+    this.panel.webview.onDidReceiveMessage((msg: { type?: string }) => {
+      if (msg && msg.type === 'requestTeacherToken') {
+        const token = getTeacherToken();
+        this.panel.webview.postMessage({
+          type: 'teacherToken',
+          token: token || '',
+          wsUrl: `ws://localhost:${getConfig().port}`,
+          hasSession: !!token,
+        });
+      }
+    }, null, this.disposables);
+
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
   /**
-   * 세션 상태에 맞는 HTML을 설정한다.
-   * 세션이 없으면(teacherToken 부재) 뷰어를 로드하지 않고 대기 화면을 보여준다 —
-   * 토큰 ''로 조인해 서버에서 거부당하거나 학생으로 오집계되는 경로를 원천 차단.
-   * 세션 시작 시 startSession → reload()가 패널을 재생성해 라이브 뷰어로 전환한다.
+   * 항상 라이브 뷰어를 로드한다. 세션 유무는 뷰어가 확장에 토큰을 물어 판단하며,
+   * 세션이 없으면 '세션 대기 중' 상태로 폴링하다가 세션이 뜨는 즉시 연결한다.
+   * (과거: 세션이 없을 때 정적 대기 HTML을 띄웠으나, 그 화면은 WS 연결·재연결이
+   *  전혀 없어 reload가 패널을 재생성하지 못하면 영영 멈추는 막다른 골목이었다.)
    */
   private refreshHtml(): void {
-    if (getTeacherToken()) {
-      const port = getConfig().port;
-      this.panel.webview.html = this.getHtmlContent(`ws://localhost:${port}`);
-    } else {
-      this.panel.webview.html = this.getIdleHtmlContent();
-    }
+    const port = getConfig().port;
+    this.panel.webview.html = this.getHtmlContent(`ws://localhost:${port}`);
   }
 
   public static createOrShow(context: vscode.ExtensionContext, viewColumn?: vscode.ViewColumn, preserveFocus = false) {
@@ -106,38 +117,6 @@ export class TeacherPreviewPanel {
       // 이미 dispose된 패널이어도 재생성은 계속한다
     }
     TeacherPreviewPanel.createOrShow(context, viewColumn, true);
-  }
-
-  /**
-   * 세션이 없을 때의 대기 화면. 뷰어 스크립트/WS 연결 없이 안내만 표시한다.
-   */
-  private getIdleHtmlContent(): string {
-    return `<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-  <title>Teacher Preview</title>
-  <style>
-    body {
-      display: flex; align-items: center; justify-content: center;
-      height: 100vh; margin: 0;
-      font-family: var(--vscode-font-family, sans-serif);
-      color: var(--vscode-descriptionForeground, #888);
-      background: var(--vscode-editor-background, transparent);
-      text-align: center;
-    }
-    .idle h2 { font-weight: 500; color: var(--vscode-foreground, #ccc); margin: 0 0 8px; }
-    .idle p { margin: 0; font-size: 0.9em; }
-  </style>
-</head>
-<body>
-  <div class="idle">
-    <h2>No active session</h2>
-    <p>Start Session을 누르면 자동으로 연결됩니다.</p>
-  </div>
-</body>
-</html>`;
   }
 
   private getHtmlContent(wsUrl: string): string {

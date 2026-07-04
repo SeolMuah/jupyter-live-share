@@ -96,7 +96,7 @@ Teachers can run real-time polls with students.
 
 **Poll Modes:**
 
-- **Number Mode**: Options displayed as numbers (1, 2, 3...) — default, 2–10 options
+- **Number Mode**: Options displayed as numbers (1, 2, 3...) — default, 2–5 options
 - **Text Mode**: Custom labels (e.g., "Agree", "Disagree", "Not sure")
 - **Quick Check Poll**: One click starts a preset understanding check (👍 got it / 🤔 not yet)
 
@@ -104,7 +104,7 @@ Teachers can run real-time polls with students.
 
 1. Click **Create Poll** in the Code Class Live Sharing sidebar
 2. Enter a question → select mode (Number/Text) → configure options
-   - Number mode: choose count (2–10)
+   - Number mode: choose count (2–5)
    - Text mode: enter labels, one per line
 3. A poll banner appears on students' browsers, and a system message is posted in chat
 
@@ -128,7 +128,7 @@ Teachers can run real-time polls with students.
 **Student Voting:**
 
 - A poll banner appears at the top when a poll is active
-- Number mode: click a number button (1–10) to vote
+- Number mode: click a number button (1–5) to vote
 - Text mode: click a label button to vote
 - One vote per student — no re-voting (buttons are disabled after voting)
 - Results update as a live bar chart (with labels in text mode)
