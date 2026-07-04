@@ -7,7 +7,7 @@ import * as crypto from 'crypto';
  * chatOnly 연결로 접속자 수에 포함되지 않음.
  */
 export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'jupyterLiveShare.viewerChatPanel';
+  public static readonly viewType = 'codeClassLive.viewerChatPanel';
 
   private _view?: vscode.WebviewView;
   private _wsUrl: string | null = null;

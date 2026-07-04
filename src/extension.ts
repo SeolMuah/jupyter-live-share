@@ -15,7 +15,7 @@ let sessionViewProvider: SessionViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   Logger.init();
-  Logger.info('Jupyter Live Share extension activated');
+  Logger.info('Code Class Live Sharing extension activated');
 
   // 비정상 종료 시 포트 정리 핸들러 등록
   registerProcessCleanupHandlers();
@@ -78,7 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.startSession', () => {
+    vscode.commands.registerCommand('codeClassLive.startSession', () => {
       if (!statusBarManager) {
         vscode.window.showErrorMessage('Extension not properly initialized');
         return;
@@ -87,7 +87,7 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.stopSession', () => {
+    vscode.commands.registerCommand('codeClassLive.stopSession', () => {
       if (!statusBarManager) return;
       stopSession(statusBarManager, sessionViewProvider);
     })
@@ -95,22 +95,22 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Poll commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.createPoll', () => createPoll(sessionViewProvider))
+    vscode.commands.registerCommand('codeClassLive.createPoll', () => createPoll(sessionViewProvider))
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.endPoll', () => endPollCommand(sessionViewProvider))
+    vscode.commands.registerCommand('codeClassLive.endPoll', () => endPollCommand(sessionViewProvider))
   );
 
   // Viewer Panel (학생용)
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.openViewer', () =>
+    vscode.commands.registerCommand('codeClassLive.openViewer', () =>
       ViewerPanel.createOrShow(context)
     )
   );
 
   // Teacher Preview Panel (선생님 판서용)
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.openTeacherPreview', () =>
+    vscode.commands.registerCommand('codeClassLive.openTeacherPreview', () =>
       TeacherPreviewPanel.createOrShow(context)
     )
   );
@@ -121,10 +121,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   // StatusBar 클릭 시 URL 복사 (사이드바와 동일한 URL 상태를 재사용)
   context.subscriptions.push(
-    vscode.commands.registerCommand('jupyterLiveShare.copyUrl', async () => {
+    vscode.commands.registerCommand('codeClassLive.copyUrl', async () => {
       const url = sessionViewProvider?.getCurrentUrl();
       if (!url) {
-        vscode.window.showWarningMessage('No active Jupyter Live Share session.');
+        vscode.window.showWarningMessage('No active Code Class Live Sharing session.');
         return;
       }
       await vscode.env.clipboard.writeText(url);
@@ -134,7 +134,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  Logger.info('Jupyter Live Share extension deactivating...');
+  Logger.info('Code Class Live Sharing extension deactivating...');
 
   // 정상 종료 시도
   try {

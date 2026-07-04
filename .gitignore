@@ -12,9 +12,17 @@ dist/
 # VS Code test
 .vscode-test/
 
-# Cloudflared binaries (bundled with extension, do not ignore)
-# bin/cloudflared*
-# bin/*.exe
+# Cloudflared binaries — 절대 커밋 금지.
+# 런타임에 고정 버전을 SHA-256 검증 후 globalStorage로 내려받는다 (번들 동봉이
+# Marketplace 'Malware' 제거의 원인이었음 — RemovedPackages.md 2026-03-18).
+bin/
+
+# AI 도구/세션 아티팩트 (실수 커밋 방지)
+.omc/
+.playwright-mcp/
+image/
+starter_code/
+resources/icon_128.png
 
 # OS files
 Thumbs.db

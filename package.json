@@ -1,32 +1,31 @@
 {
-  "name": "jupyter-live-share",
-  "displayName": "Jupyter Live Share",
-  "description": "Real-time Jupyter Notebook & code file sharing for classrooms — broadcast .ipynb, .py, .md via browser and in-editor preview with drawing, polls, and chat",
-  "version": "2.2.20",
-  "publisher": "seolmuah",
+  "name": "code-class-live-sharing",
+  "displayName": "Code Class Live Sharing",
+  "description": "Real-time classroom sharing for code files and Jupyter notebooks — students follow .ipynb, .py, .md in their browser, with drawing, polls, and chat",
+  "version": "1.0.0",
+  "publisher": "codeclasslive",
   "license": "MIT",
   "keywords": [
-    "jupyter",
-    "notebook",
-    "live share",
-    "real-time",
     "classroom",
     "teaching",
     "education",
+    "live sharing",
+    "real-time",
     "broadcast",
+    "jupyter",
+    "notebook",
+    "ipynb",
     "collaboration",
     "drawing",
     "poll",
-    "cloudflare tunnel",
-    "ipynb",
     "preview"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/SeolMuah/jupyter-live-share"
+    "url": "https://github.com/paircodingofficial-cloud/code-class-live-sharing"
   },
   "bugs": {
-    "url": "https://github.com/SeolMuah/jupyter-live-share/issues",
+    "url": "https://github.com/paircodingofficial-cloud/code-class-live-sharing/issues",
     "email": "seolmuah@gmail.com"
   },
   "engines": {
@@ -38,60 +37,70 @@
   ],
   "activationEvents": [
     "onNotebook:jupyter-notebook",
-    "onCommand:jupyterLiveShare.startSession",
-    "onCommand:jupyterLiveShare.openViewer",
-    "onCommand:jupyterLiveShare.openTeacherPreview",
-    "onWebviewPanel:jupyterLiveShare.teacherPreview"
+    "onCommand:codeClassLive.startSession",
+    "onCommand:codeClassLive.openViewer",
+    "onCommand:codeClassLive.openTeacherPreview",
+    "onWebviewPanel:codeClassLive.teacherPreview"
   ],
-  "icon": "resources/jupyter_live_extension_icon.png",
+  "icon": "resources/icon.png",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Starting a sharing session runs a local server and the cloudflared tunnel executable, so workspace trust is required."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Sharing reads files from the local disk and is not available in virtual workspaces."
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "jupyterLiveShare.startSession",
+        "command": "codeClassLive.startSession",
         "title": "Start Session",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       },
       {
-        "command": "jupyterLiveShare.stopSession",
+        "command": "codeClassLive.stopSession",
         "title": "Stop Session",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       },
       {
-        "command": "jupyterLiveShare.openViewer",
+        "command": "codeClassLive.openViewer",
         "title": "Open Viewer",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       },
       {
-        "command": "jupyterLiveShare.createPoll",
+        "command": "codeClassLive.createPoll",
         "title": "Create Poll",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       },
       {
-        "command": "jupyterLiveShare.endPoll",
+        "command": "codeClassLive.endPoll",
         "title": "End Poll",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       },
       {
-        "command": "jupyterLiveShare.openTeacherPreview",
+        "command": "codeClassLive.openTeacherPreview",
         "title": "Open Teacher Preview",
-        "category": "Jupyter Live Share"
+        "category": "Code Class Live Sharing"
       }
     ],
     "configuration": {
-      "title": "Jupyter Live Share",
+      "title": "Code Class Live Sharing",
       "properties": {
-        "jupyterLiveShare.port": {
+        "codeClassLive.port": {
           "type": "number",
           "default": 48632,
           "description": "Local server port for the live share session"
         },
-        "jupyterLiveShare.maxViewers": {
+        "codeClassLive.maxViewers": {
           "type": "number",
           "default": 100,
           "description": "Maximum number of concurrent viewers"
         },
-        "jupyterLiveShare.tunnelProvider": {
+        "codeClassLive.tunnelProvider": {
           "type": "string",
           "enum": [
             "cloudflare",
@@ -100,12 +109,21 @@
           "default": "cloudflare",
           "description": "Tunnel provider for external access"
         },
-        "jupyterLiveShare.imageMaxWidth": {
+        "codeClassLive.bindAddress": {
+          "type": "string",
+          "enum": [
+            "127.0.0.1",
+            "0.0.0.0"
+          ],
+          "default": "127.0.0.1",
+          "description": "Network interface the local server binds to. Keep the default (127.0.0.1) unless you need direct LAN access without the tunnel — 0.0.0.0 exposes the session to everyone on your local network."
+        },
+        "codeClassLive.imageMaxWidth": {
           "type": "number",
           "default": 1280,
           "description": "Maximum image width in pixels for optimization (default: 1280)"
         },
-        "jupyterLiveShare.imageMaxSizeKB": {
+        "codeClassLive.imageMaxSizeKB": {
           "type": "number",
           "default": 2048,
           "description": "Maximum image size in KB after optimization (default: 2048)"
@@ -115,30 +133,30 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "jupyterLiveShare",
-          "title": "Jupyter Live Share",
+          "id": "codeClassLive",
+          "title": "Code Class Live Sharing",
           "icon": "resources/icon.svg"
         }
       ],
       "panel": [
         {
-          "id": "jupyterLiveShareChat",
+          "id": "codeClassLiveChat",
           "title": "Viewer Chat",
           "icon": "resources/icon.svg"
         }
       ]
     },
     "views": {
-      "jupyterLiveShare": [
+      "codeClassLive": [
         {
-          "id": "jupyterLiveShare.sessionView",
+          "id": "codeClassLive.sessionView",
           "name": "Session",
           "type": "webview"
         }
       ],
-      "jupyterLiveShareChat": [
+      "codeClassLiveChat": [
         {
-          "id": "jupyterLiveShare.viewerChatPanel",
+          "id": "codeClassLive.viewerChatPanel",
           "name": "Chat",
           "type": "webview"
         }

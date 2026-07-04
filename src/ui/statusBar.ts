@@ -5,7 +5,7 @@ export class StatusBarManager implements vscode.Disposable {
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.item.command = 'jupyterLiveShare.startSession';
+    this.item.command = 'codeClassLive.startSession';
     this.hide();
   }
 
@@ -13,14 +13,14 @@ export class StatusBarManager implements vscode.Disposable {
     this.item.text = `$(broadcast) Live Share: ${viewerCount}명 접속`;
     this.item.tooltip = tunnelUrl
       ? `${tunnelUrl}\nClick to copy URL`
-      : 'Jupyter Live Share';
-    this.item.command = tunnelUrl ? undefined : 'jupyterLiveShare.startSession';
+      : 'Code Class Live Sharing';
+    this.item.command = tunnelUrl ? undefined : 'codeClassLive.startSession';
 
     if (tunnelUrl) {
       // URL 복사 명령으로 변경
       this.item.command = {
         title: 'Copy URL',
-        command: 'jupyterLiveShare.copyUrl',
+        command: 'codeClassLive.copyUrl',
       } as unknown as string;
     }
 
@@ -33,8 +33,8 @@ export class StatusBarManager implements vscode.Disposable {
 
   hide() {
     this.item.text = '$(broadcast) Live Share';
-    this.item.tooltip = 'Start Jupyter Live Share session';
-    this.item.command = 'jupyterLiveShare.startSession';
+    this.item.tooltip = 'Start Code Class Live Sharing session';
+    this.item.command = 'codeClassLive.startSession';
     this.item.hide();
   }
 

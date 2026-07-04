@@ -26,6 +26,7 @@ draw*.png
 # 확장과 무관한 사용자 데이터/스크래치
 starter_code/**
 image/**
+resources/icon_128.png
 # 루트의 스크래치 txt/png (한글 파일명 Unicode 정규화 이슈 회피 위해 확장자로 제외).
 # 아이콘(resources/*.png)·LICENSE(확장자 없음)는 영향 없음 — glob이 슬래시를 넘지 않음.
 *.png

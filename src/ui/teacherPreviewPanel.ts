@@ -6,7 +6,7 @@ import { Logger } from '../utils/logger';
 
 export class TeacherPreviewPanel {
   public static currentPanel: TeacherPreviewPanel | undefined;
-  private static readonly viewType = 'jupyterLiveShare.teacherPreview';
+  private static readonly viewType = 'codeClassLive.teacherPreview';
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
@@ -216,7 +216,7 @@ export class TeacherPreviewPanel {
   <!-- PIN/Name screens hidden for teacher preview -->
   <div id="pin-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter the session PIN to join:</p>
       <input type="text" id="pin-input" maxlength="6" pattern="\\d*" placeholder="PIN" autofocus>
       <button id="pin-submit">Join</button>
@@ -226,7 +226,7 @@ export class TeacherPreviewPanel {
 
   <div id="name-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter your name to join:</p>
       <input type="text" id="name-input" maxlength="30" placeholder="Your name" autofocus>
       <button id="name-submit">Join</button>

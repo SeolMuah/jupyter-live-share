@@ -5,7 +5,7 @@ import { ViewerChatPanelProvider } from './viewerChatPanel';
 
 export class ViewerPanel {
   public static currentPanel: ViewerPanel | undefined;
-  private static readonly viewType = 'jupyterLiveShare.viewer';
+  private static readonly viewType = 'codeClassLive.viewer';
   private static chatPanel: ViewerChatPanelProvider | undefined;
 
   private readonly panel: vscode.WebviewPanel;
@@ -36,7 +36,7 @@ export class ViewerPanel {
 
     // Viewer Chat 패널을 하단 패널에서 포커스
     setTimeout(() => {
-      vscode.commands.executeCommand('jupyterLiveShare.viewerChatPanel.focus');
+      vscode.commands.executeCommand('codeClassLive.viewerChatPanel.focus');
     }, 300);
   }
 
@@ -172,7 +172,7 @@ export class ViewerPanel {
   <!-- PIN 입력 화면 -->
   <div id="pin-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter the session PIN to join:</p>
       <input type="text" id="pin-input" maxlength="6" pattern="\\d*" placeholder="PIN" autofocus>
       <button id="pin-submit">Join</button>
@@ -183,7 +183,7 @@ export class ViewerPanel {
   <!-- 이름 입력 화면 -->
   <div id="name-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter your name to join:</p>
       <input type="text" id="name-input" maxlength="30" placeholder="Your name" autofocus>
       <button id="name-submit">Join</button>

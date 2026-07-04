@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; font-src 'self' https://cdnjs.cloudflare.com data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src 'none'">
-  <title>Live Share</title>
+  <title>Code Class Live Sharing</title>
   <link rel="stylesheet" href="style.css">
   <!-- highlight.js - Python syntax highlighting (VS Code-like themes) -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css" id="hljs-light" integrity="sha384-Ao8ogxjh8YOpD0QuD98ftM0JgunR9NBRo18vvW76DgMR3Ek/XScY5KdUdV1Ams5S" crossorigin="anonymous" referrerpolicy="no-referrer">
@@ -53,7 +53,7 @@
   <!-- PIN 입력 화면 -->
   <div id="pin-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter the session PIN to join:</p>
       <input type="text" id="pin-input" maxlength="6" pattern="\d*" placeholder="PIN" autofocus>
       <button id="pin-submit">Join</button>
@@ -64,7 +64,7 @@
   <!-- 이름 입력 화면 -->
   <div id="name-screen" class="pin-screen" style="display:none;">
     <div class="pin-box">
-      <h2>Jupyter Live Share</h2>
+      <h2>Code Class Live Sharing</h2>
       <p>Enter your name to join:</p>
       <input type="text" id="name-input" maxlength="30" placeholder="Your name" autofocus>
       <button id="name-submit">Join</button>

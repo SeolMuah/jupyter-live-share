@@ -5,7 +5,7 @@ let outputChannel: vscode.OutputChannel | undefined;
 export class Logger {
   static init() {
     if (!outputChannel) {
-      outputChannel = vscode.window.createOutputChannel('Jupyter Live Share');
+      outputChannel = vscode.window.createOutputChannel('Code Class Live Sharing');
     }
   }
 

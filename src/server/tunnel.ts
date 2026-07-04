@@ -1,23 +1,58 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import * as zlib from 'zlib';
+import * as crypto from 'crypto';
 import { Logger } from '../utils/logger';
 
-// Bundled binaries included in the extension package
-const BUNDLED_BINARIES: Record<string, string> = {
-  'win32-x64': 'cloudflared.exe',
-  'darwin-x64': 'cloudflared-darwin-x64',
-  'darwin-arm64': 'cloudflared-darwin-arm64',
-};
+// 고정 릴리스에서만 다운로드하고, 자산별 공식 SHA-256(GitHub release asset digest)을
+// 하드코딩해 다운로드 직후 검증한다(fail-closed: 불일치 시 삭제·실행 거부).
+// 'latest' 미고정 다운로드는 릴리스 하이재킹 시 임의 바이너리가 그대로 실행되는
+// 공급망 구멍이자, 마켓플레이스 보안 스캐너가 dropper로 분류하는 행위 패턴이다.
+// 버전을 올릴 때는 URL 태그와 sha256을 함께 갱신할 것 (digest는
+// https://api.github.com/repos/cloudflare/cloudflared/releases 의 asset digest 필드).
+const CLOUDFLARED_VERSION = '2026.6.1';
 
-// Fallback download URLs if bundled binary is missing
-const CLOUDFLARED_URLS: Record<string, string> = {
-  'win32-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-  'darwin-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz',
-  'darwin-arm64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz',
-  'linux-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+interface CloudflaredAsset {
+  url: string;
+  sha256: string;
+  archive: 'none' | 'tgz';
+}
+
+const CLOUDFLARED_ASSETS: Record<string, CloudflaredAsset> = {
+  'win32-x64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`,
+    sha256: '5253e66f1f493c4e13539749f1aa86fd0c61e3072900fec29a44ba046a6d97e2',
+    archive: 'none',
+  },
+  // Windows on ARM: cloudflared가 win-arm64 네이티브 자산을 제공하지 않음(2026.6.1 기준)
+  // — Windows 11 ARM64의 x64 에뮬레이션으로 amd64 빌드를 실행한다.
+  'win32-arm64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`,
+    sha256: '5253e66f1f493c4e13539749f1aa86fd0c61e3072900fec29a44ba046a6d97e2',
+    archive: 'none',
+  },
+  'darwin-x64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-darwin-amd64.tgz`,
+    sha256: 'd7a66b525fe76820da6e5406611b61e48b40de682368ac00454d9158f085be4b',
+    archive: 'tgz',
+  },
+  'darwin-arm64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-darwin-arm64.tgz`,
+    sha256: 'f6d4c439c6c782b83264951d327989ce5e23373acc5942b872411601fedb020d',
+    archive: 'tgz',
+  },
+  'linux-x64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64`,
+    sha256: '5861a10a438fe8ddcfebb3b830f83966cbf193edafce0fe2eeb198fbae1f7a22',
+    archive: 'none',
+  },
+  'linux-arm64': {
+    url: `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-arm64`,
+    sha256: '59816ce9b16db71f5bc2a86d59b3632a96c8c3ee934bde2bc8641ee83a6070eb',
+    archive: 'none',
+  },
 };
 
 export class TunnelManager {
@@ -27,8 +62,13 @@ export class TunnelManager {
   // 세션 내 확정된 cloudflared 경로. start()의 재시도 루프가 버전검사/다운로드를 반복하지 않도록 캐싱.
   private resolvedBinary: string | null = null;
 
-  constructor(extensionPath: string) {
-    this.binDir = path.join(extensionPath, 'bin');
+  /**
+   * @param storageDir 확장의 globalStorage 경로 (context.globalStorageUri.fsPath).
+   * 다운로드 바이너리는 확장 설치 디렉터리가 아닌 globalStorage에 둔다 —
+   * 설치 디렉터리 기록은 확장 무결성 검증을 깨뜨리고 업데이트 시 유실된다.
+   */
+  constructor(storageDir: string) {
+    this.binDir = path.join(storageDir, 'cloudflared');
   }
 
   get url(): string | null {
@@ -38,9 +78,9 @@ export class TunnelManager {
   private static readonly MAX_RETRIES = 2;
   private static readonly RETRY_DELAY_MS = 2000;
   // Cloudflare가 서버측에서 오래된 cloudflared의 quick-tunnel 생성을 거부한다("invalid UUID length: 0").
-  // 이 값은 quick-tunnel 성공이 실증된 최소 버전. cloudflared는 날짜형(YYYY.M.P)이라 숫자 비교가 성립한다.
-  // [하드코딩 리스크] Cloudflare가 하한을 다시 올리면 이 값을 올려야 하지만, 게이트가 트리거되면 항상
-  // releases/latest를 받으므로 '알려진 정상값 이상'이기만 하면 노후 바이너리는 최신으로 자가치유된다.
+  // 이 값은 quick-tunnel 성공이 실증된 최소 버전으로, '시스템 PATH에 설치된 cloudflared'의
+  // 사용 가능 여부 게이트에만 쓰인다(구버전이면 무시하고 고정 릴리스를 다운로드).
+  // cloudflared는 날짜형(YYYY.M.P)이라 숫자 비교가 성립한다. CLOUDFLARED_VERSION을 올릴 때 함께 검토할 것.
   private static readonly MIN_VERSION = '2026.6.1';
 
   async start(port: number, onProgress?: (message: string) => void): Promise<string> {
@@ -206,131 +246,136 @@ export class TunnelManager {
   }
 
   private async ensureBinary(): Promise<string> {
-    // 세션 내 memoize: start()의 재시도 루프(MAX_RETRIES)가 버전검사/다운로드를 매번 반복
-    // 트리거하지 않도록 한 번 확정한 경로를 재사용한다 (오프라인+구버전에서 재시도마다
-    // doomed 다운로드를 반복하는 회귀 방지).
+    // 세션 내 memoize: start()의 재시도 루프(MAX_RETRIES)가 탐지/다운로드를 매번 반복하지 않도록.
     if (this.resolvedBinary && fs.existsSync(this.resolvedBinary)) {
       return this.resolvedBinary;
     }
 
-    const platform = process.platform;
-    const arch = process.arch;
-    const key = `${platform}-${arch}`;
-    const binName = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
-    const binPath = path.join(this.binDir, binName);
-    const downloadUrl = CLOUDFLARED_URLS[key];
-
-    if (!fs.existsSync(this.binDir)) {
-      fs.mkdirSync(this.binDir, { recursive: true });
+    // 1) 사용자가 직접 설치한 시스템 cloudflared 우선 (다운로드 자체를 회피)
+    const system = await this.findUsableSystemBinary();
+    if (system) {
+      this.resolvedBinary = system;
+      return system;
     }
 
-    // 1) 다운로드 없이 '후보' 바이너리 확보 (기존 캐시 우선, 없으면 번들)
-    let candidate: string | null = null;
-    if (fs.existsSync(binPath)) {
-      candidate = binPath;
-    } else {
-      const bundledBinName = BUNDLED_BINARIES[key];
-      if (bundledBinName) {
-        const bundledPath = path.join(this.binDir, bundledBinName);
-        if (fs.existsSync(bundledPath)) {
-          Logger.info(`Using bundled cloudflared for ${key}`);
-          if (platform === 'win32') {
-            candidate = bundledPath; // win32: 번들 .exe는 이미 올바른 이름 → 그대로 사용(현행 보존)
-          } else {
-            // macOS: 번들을 기대 이름 'cloudflared'로 복사(현행 보존)
-            fs.copyFileSync(bundledPath, binPath);
-            fs.chmodSync(binPath, 0o755);
-            Logger.info(`Copied bundled binary to ${binPath}`);
-            candidate = binPath;
-          }
-        }
-      }
+    const key = `${process.platform}-${process.arch}`;
+    const asset = CLOUDFLARED_ASSETS[key];
+    if (!asset) {
+      throw new Error(
+        `Unsupported platform: ${key}. Install cloudflared manually (https://developers.cloudflare.com/cloudflared/) and make sure it is on PATH.`
+      );
     }
 
-    // 2) 후보가 있으면 fail-safe 버전 게이트
-    if (candidate) {
-      const version = await this.getBinaryVersion(candidate);
+    const binName = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+    const versionDir = path.join(this.binDir, CLOUDFLARED_VERSION);
+    const binPath = path.join(versionDir, binName);
+    const markerPath = `${binPath}.sha256`;
 
-      // 버전 판별 불가(spawn 오류/타임아웃/파싱 실패) → 현행 그대로 사용(fail-safe: 절대 현행보다 나빠지지 않음)
-      if (version === null) {
-        Logger.warn('Could not determine cloudflared version; using existing binary as-is (fail-safe)');
-        this.resolvedBinary = candidate;
-        return candidate;
-      }
-
-      // 최신(>= MIN_VERSION)이면 다운로드 없이 즉시 반환(빠른 경로 보존)
-      if (this.isVersionAtLeast(version, TunnelManager.MIN_VERSION)) {
-        Logger.info(`cloudflared ${version} is up to date (>= ${TunnelManager.MIN_VERSION})`);
-        this.resolvedBinary = candidate;
-        return candidate;
-      }
-
-      // 확실히 구버전 → Cloudflare가 quick-tunnel을 거부하므로 latest로 갱신 시도
-      Logger.warn(`cloudflared ${version} is older than ${TunnelManager.MIN_VERSION}; downloading the latest build`);
-      if (downloadUrl) {
-        try {
-          // 임시 디렉터리로 받아 성공 시에만 원자적 교체 → 실패해도 후보(candidate) 훼손 없음
-          await this.downloadBinary(downloadUrl, binPath, platform);
-          Logger.info('cloudflared updated to the latest build');
+    // 2) 기존 설치본 재사용 — 설치 시 기록한 최종 바이너리 해시로 무결성 재검증
+    //    (변조·부분쓰기 감지 시 폐기 후 재다운로드)
+    if (fs.existsSync(binPath) && fs.existsSync(markerPath)) {
+      try {
+        const expected = fs.readFileSync(markerPath, 'utf8').trim();
+        const actual = await this.fileSha256(binPath);
+        if (expected && actual === expected) {
           this.resolvedBinary = binPath;
           return binPath;
-        } catch (err) {
-          // 오프라인 등 실패 → 기존 후보로 폴백(현행보다 나빠지지 않음)
-          Logger.warn(`Update download failed (${err instanceof Error ? err.message : String(err)}); falling back to existing binary`);
         }
-      } else {
-        Logger.warn(`No download URL for ${key}; falling back to existing binary`);
+        Logger.warn('Cached cloudflared failed its integrity check; re-downloading');
+      } catch (err) {
+        Logger.warn(`Cached cloudflared integrity check errored (${err instanceof Error ? err.message : String(err)}); re-downloading`);
       }
-      const fallback = fs.existsSync(candidate) ? candidate : binPath;
-      this.resolvedBinary = fallback;
-      return fallback;
+      try { fs.rmSync(versionDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 
-    // 3) 후보 자체가 없음: 반드시 다운로드(현행 동작)
-    if (!downloadUrl) {
-      throw new Error(`Unsupported platform: ${key}. Please install cloudflared manually.`);
-    }
-    Logger.info(`Downloading cloudflared for ${key}...`);
-    await this.downloadBinary(downloadUrl, binPath, platform);
-    Logger.info('cloudflared downloaded successfully');
+    // 3) 고정 릴리스 다운로드 + SHA-256 검증 (불일치 시 실행 없이 중단)
+    Logger.info(`Downloading cloudflared ${CLOUDFLARED_VERSION} for ${key}...`);
+    await this.downloadPinnedBinary(asset, binPath);
+    Logger.info(`cloudflared ${CLOUDFLARED_VERSION} downloaded and SHA-256 verified`);
     this.resolvedBinary = binPath;
     return binPath;
   }
 
   /**
-   * URL을 binDir 하위 임시 디렉터리에 받아(.tgz면 해제) 성공 시에만 renameSync로 destPath에 원자적 배치.
-   * 실패 시 destPath(기존 바이너리)를 절대 건드리지 않는다 → 무회귀 폴백 보장.
-   * (임시 디렉터리를 binDir 하위에 두는 이유: rename이 동일 파일시스템 내 원자적 연산이 되어 EXDEV 회피)
+   * PATH에서 사용자가 설치한 cloudflared를 찾는다. MIN_VERSION 이상일 때만 사용
+   * (Cloudflare가 구버전의 quick-tunnel 생성을 서버측에서 거부하므로).
+   * 사용자 소유 바이너리라 해시 검증 대상이 아니다 — 우리 확장이 설치한 것만 검증한다.
    */
-  private async downloadBinary(url: string, destPath: string, platform: string): Promise<void> {
-    if (!fs.existsSync(this.binDir)) {
-      fs.mkdirSync(this.binDir, { recursive: true });
-    }
-    const tmpDir = fs.mkdtempSync(path.join(this.binDir, '.dl-'));
+  private async findUsableSystemBinary(): Promise<string | null> {
     try {
-      let producedPath: string;
-      if (url.endsWith('.tgz')) {
-        const tgzPath = path.join(tmpDir, 'cloudflared.tgz');
-        await this.downloadFile(url, tgzPath);
-        await this.extractTgz(tgzPath, tmpDir); // tar 내 파일명 'cloudflared'로 해제됨
+      const finder = process.platform === 'win32' ? 'where' : 'which';
+      const res = spawnSync(finder, ['cloudflared'], { timeout: 3000, encoding: 'utf8' });
+      if (res.status !== 0 || !res.stdout) return null;
+      const found = res.stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0];
+      if (!found || !fs.existsSync(found)) return null;
+      const version = await this.getBinaryVersion(found);
+      if (version && this.isVersionAtLeast(version, TunnelManager.MIN_VERSION)) {
+        Logger.info(`Using system-installed cloudflared ${version} (${found})`);
+        return found;
+      }
+      if (version) {
+        Logger.info(`System cloudflared ${version} is older than ${TunnelManager.MIN_VERSION}; using the pinned download instead`);
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 고정 릴리스 자산을 임시 디렉터리에 받아 하드코딩된 SHA-256과 대조하고(fail-closed),
+   * 통과 시에만 해제·배치한다. 실패 시 어떤 파일도 실행되지 않고 임시 디렉터리는 삭제된다.
+   * 배치 후 최종 바이너리의 해시를 .sha256 마커로 남겨 이후 세션의 재검증에 쓴다.
+   */
+  private async downloadPinnedBinary(asset: CloudflaredAsset, destPath: string): Promise<void> {
+    const destDir = path.dirname(destPath);
+    fs.mkdirSync(destDir, { recursive: true });
+    const tmpDir = fs.mkdtempSync(path.join(destDir, '.dl-'));
+    try {
+      const downloadPath = path.join(tmpDir, asset.archive === 'tgz' ? 'cloudflared.tgz' : path.basename(destPath));
+      await this.downloadFile(asset.url, downloadPath);
+
+      // 공급망 방어의 핵심: 다운로드 자산을 공식 릴리스의 고정 해시와 대조.
+      // 불일치 = 전송 오류 또는 릴리스 변조 → 절대 실행하지 않는다.
+      const actual = await this.fileSha256(downloadPath);
+      if (actual !== asset.sha256) {
+        throw new Error(
+          `cloudflared download failed integrity verification (SHA-256 mismatch; expected ${asset.sha256.slice(0, 12)}…, got ${actual.slice(0, 12)}…). The file was NOT executed.`
+        );
+      }
+
+      let producedPath = downloadPath;
+      if (asset.archive === 'tgz') {
+        await this.extractTgz(downloadPath, tmpDir); // tar 내 파일명 'cloudflared'로 해제됨
         producedPath = path.join(tmpDir, 'cloudflared');
-      } else {
-        producedPath = path.join(tmpDir, path.basename(destPath));
-        await this.downloadFile(url, producedPath);
+        if (!fs.existsSync(producedPath)) {
+          throw new Error('cloudflared binary not found inside the downloaded archive');
+        }
       }
-      if (!fs.existsSync(producedPath)) {
-        throw new Error(`Downloaded cloudflared not found at ${producedPath}`);
-      }
-      if (platform !== 'win32') {
+      if (process.platform !== 'win32') {
         fs.chmodSync(producedPath, 0o755);
       }
-      fs.renameSync(producedPath, destPath); // 동일 파일시스템 내 원자적 교체
-      if (platform !== 'win32') {
+
+      const binHash = await this.fileSha256(producedPath);
+      fs.renameSync(producedPath, destPath); // 동일 파일시스템 내 원자적 배치
+      if (process.platform !== 'win32') {
         fs.chmodSync(destPath, 0o755);
       }
+      fs.writeFileSync(`${destPath}.sha256`, binHash);
     } finally {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  }
+
+  /** 파일의 SHA-256 hex digest (스트리밍 — 대용량 바이너리 메모리 부담 없음). */
+  private fileSha256(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const stream = fs.createReadStream(filePath);
+      stream.on('data', (d) => hash.update(d));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', reject);
+    });
   }
 
   /** `binaryPath --version` 실행 → 'cloudflared version YYYY.M.P' 파싱. 실패/타임아웃 시 null(=판별불가). */
@@ -407,14 +452,22 @@ export class TunnelManager {
     });
   }
 
+  private static readonly MAX_REDIRECTS = 5;
+  private static readonly MAX_DOWNLOAD_BYTES = 120 * 1024 * 1024; // 자산 최대 ~55MB의 2배 여유
+
   private downloadFile(url: string, dest: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const follow = (currentUrl: string) => {
+      const follow = (currentUrl: string, redirectsLeft: number) => {
         const request = https.get(currentUrl, (response) => {
-          // 리다이렉트 처리 (301/302/307/308)
+          // 리다이렉트 처리 (301/302/307/308) — 깊이 제한으로 무한 재귀 차단
           if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
             response.resume(); // 리다이렉트 응답 본문 드레인 (소켓 누수 방지)
-            follow(response.headers.location);
+            if (redirectsLeft <= 0) {
+              reject(new Error('Download failed: too many redirects'));
+              return;
+            }
+            // location이 상대경로일 수 있으므로 현재 URL 기준으로 해석
+            follow(new URL(response.headers.location, currentUrl).toString(), redirectsLeft - 1);
             return;
           }
 
@@ -423,6 +476,15 @@ export class TunnelManager {
             reject(new Error(`Download failed with status ${response.statusCode}`));
             return;
           }
+
+          // 크기 상한 — 비정상적으로 큰 응답(오도된 리다이렉트/변조)을 조기 차단
+          let received = 0;
+          response.on('data', (chunk: Buffer) => {
+            received += chunk.length;
+            if (received > TunnelManager.MAX_DOWNLOAD_BYTES) {
+              request.destroy(new Error('Download exceeds size limit'));
+            }
+          });
 
           const file = fs.createWriteStream(dest);
           response.pipe(file);
@@ -440,7 +502,7 @@ export class TunnelManager {
         request.on('error', reject);
       };
 
-      follow(url);
+      follow(url, TunnelManager.MAX_REDIRECTS);
     });
   }
 }

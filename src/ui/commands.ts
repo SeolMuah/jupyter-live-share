@@ -12,6 +12,38 @@ import { Logger } from '../utils/logger';
 
 let tunnel: TunnelManager | null = null;
 let isRunning = false;
+// 동의 모달·서버 기동 중 재진입 차단 래치 — isRunning은 서버 기동 후에야 true가 되므로,
+// 모달이 떠 있는 동안 Start를 또 누르면 두 세션이 동시에 기동을 시도한다(EADDRINUSE 유발).
+let isStarting = false;
+
+const CLOUDFLARED_CONSENT_KEY = 'codeClassLive.cloudflaredConsent';
+
+/**
+ * cloudflared 다운로드·실행과 공개 URL 생성에 대한 1회 명시적 동의.
+ * Marketplace 정책(Publisher Agreement §8(d))상, 리스팅에 공지된 범위를 넘는 실행코드
+ * 설치·실행은 금지된다 — README 공지에 더해 런타임 동의로 사용자가 직접 승인하게 한다.
+ * 승인은 globalState에 영구 저장(1회만 질문), 거부/취소 시 이번 세션은 localhost로만 서비스.
+ */
+async function ensureTunnelConsent(context: vscode.ExtensionContext): Promise<boolean> {
+  if (context.globalState.get<boolean>(CLOUDFLARED_CONSENT_KEY) === true) return true;
+  const allow = 'Allow';
+  const choice = await vscode.window.showInformationMessage(
+    'Share this session over the internet?',
+    {
+      modal: true,
+      detail:
+        "Code Class Live Sharing runs Cloudflare's cloudflared tool to create a temporary public URL (*.trycloudflare.com) that students open in their browser.\n\n" +
+        "If cloudflared is not installed on this machine, it will be downloaded once from Cloudflare's official GitHub release (version-pinned, SHA-256 verified).\n\n" +
+        'Anyone with the URL can view the shared file while the session is running. Choosing "Cancel" starts the session on localhost only.',
+    },
+    allow
+  );
+  if (choice === allow) {
+    await context.globalState.update(CLOUDFLARED_CONSENT_KEY, true);
+    return true;
+  }
+  return false;
+}
 
 /**
  * 터널을 동기적으로 강제 종료한다 (프로세스 exit 핸들러용)
@@ -30,10 +62,11 @@ export async function startSession(
   teacherNameParam?: string,
   shareImages?: boolean
 ) {
-  if (isRunning) {
-    vscode.window.showWarningMessage('Jupyter Live Share session is already running.');
+  if (isRunning || isStarting) {
+    vscode.window.showWarningMessage('Code Class Live Sharing session is already running.');
     return;
   }
+  isStarting = true;
 
   // 활성 에디터 확인 (노트북 또는 텍스트) — 파일 없이도 세션 시작 가능
   const notebookEditor = vscode.window.activeNotebookEditor;
@@ -44,6 +77,11 @@ export async function startSession(
 
   const config = getConfig();
 
+  // 터널(공개 URL) 사용 전 1회 명시적 동의 — 거부/취소 시 localhost로만 서비스
+  const tunnelConsent = config.tunnelProvider === 'cloudflare'
+    ? await ensureTunnelConsent(context)
+    : false;
+
   try {
     // PIN 없이 바로 시작 (뷰잉은 URL로 오픈, 교사 권한만 토큰으로 게이트)
     const pin: string | null = null;
@@ -51,10 +89,23 @@ export async function startSession(
 
     // 1. HTTP 서버 시작
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Starting Jupyter Live Share...' },
+      { location: vscode.ProgressLocation.Notification, title: 'Starting Code Class Live Sharing...' },
       async (progress) => {
         progress.report({ message: 'Starting server...' });
-        const httpServer = await startHttpServer(config.port);
+        const httpServer = await startHttpServer(config.port, config.bindAddress, async (busyPort) => {
+          // 포트 점유 프로세스를 죽이기 전 반드시 사용자 확인 (대개 이전 세션의 잔재지만
+          // 무관한 프로세스일 수도 있으므로 무단 종료하지 않는다)
+          const terminate = 'Terminate and Continue';
+          const picked = await vscode.window.showWarningMessage(
+            `Port ${busyPort} is in use by another process`,
+            {
+              modal: true,
+              detail: 'This is usually a previous sharing session that did not exit cleanly. Terminate that process and continue?',
+            },
+            terminate
+          );
+          return picked === terminate;
+        });
 
         // 2. WebSocket 서버 시작
         progress.report({ message: 'Starting WebSocket...' });
@@ -94,9 +145,11 @@ export async function startSession(
 
         let tunnelStatus: string | undefined;
 
-        if (config.tunnelProvider === 'cloudflare') {
+        if (config.tunnelProvider === 'cloudflare' && tunnelConsent) {
           progress.report({ message: 'Creating tunnel (this may take a few seconds)...' });
-          tunnel = new TunnelManager(context.extensionPath);
+          // 다운로드 바이너리는 globalStorage에 둔다 — 확장 설치 디렉터리 기록은
+          // 확장 무결성 검증을 깨뜨리고 업데이트 시 유실된다.
+          tunnel = new TunnelManager(context.globalStorageUri.fsPath);
           try {
             tunnelUrl = await tunnel.start(config.port, (msg) => {
               progress.report({ message: msg });
@@ -109,6 +162,9 @@ export async function startSession(
               `Tunnel creation failed (retries exhausted). Using local URL: http://localhost:${config.port}`
             );
           }
+        } else if (config.tunnelProvider === 'cloudflare') {
+          // 동의 거부/취소 — 이번 세션은 localhost로만 서비스
+          tunnelStatus = 'Tunnel off (not allowed) — localhost only';
         }
 
         // 5. UI 업데이트 (최종 URL 반영)
@@ -128,7 +184,7 @@ export async function startSession(
         await vscode.env.clipboard.writeText(tunnelUrl);
 
         vscode.window.showInformationMessage(
-          `Jupyter Live Share started! URL copied to clipboard: ${tunnelUrl}`,
+          `Code Class Live Sharing started! URL copied to clipboard: ${tunnelUrl}`,
           'Open in Browser'
         ).then((choice) => {
           if (choice === 'Open in Browser') {
@@ -150,6 +206,8 @@ export async function startSession(
     );
     // 정리
     await cleanupSession(statusBar, sidebarView);
+  } finally {
+    isStarting = false;
   }
 }
 
@@ -159,7 +217,7 @@ export async function stopSession(
 ) {
   if (!isRunning) return;
   await cleanupSession(statusBar, sidebarView);
-  vscode.window.showInformationMessage('Jupyter Live Share session stopped.');
+  vscode.window.showInformationMessage('Code Class Live Sharing session stopped.');
 }
 
 export async function createPoll(sidebarView?: SessionViewProvider) {
@@ -181,7 +239,9 @@ export async function createPoll(sidebarView?: SessionViewProvider) {
 
   try {
     const postData = JSON.stringify({ question, optionCount });
-    const url = `http://localhost:${config.port}/api/poll/start`;
+    // 서버가 IPv4 루프백(127.0.0.1)에만 바인딩되므로 Node fetch도 IPv4로 직접 접속
+    // (Node 18의 fetch는 Happy Eyeballs 미적용 — localhost가 ::1로 먼저 풀리는 호스트에서 ECONNREFUSED 방지)
+    const url = `http://127.0.0.1:${config.port}/api/poll/start`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -215,7 +275,8 @@ export async function endPollCommand(sidebarView?: SessionViewProvider) {
   const config = getConfig();
 
   try {
-    const url = `http://localhost:${config.port}/api/poll/end`;
+    // IPv4 직접 접속 — poll/start와 동일한 이유
+    const url = `http://127.0.0.1:${config.port}/api/poll/end`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);

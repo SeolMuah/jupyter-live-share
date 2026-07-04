@@ -14,7 +14,7 @@ interface SessionState {
 }
 
 export class SessionViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'jupyterLiveShare.sessionView';
+  public static readonly viewType = 'codeClassLive.sessionView';
 
   private _view?: vscode.WebviewView;
   private _state: SessionState = {

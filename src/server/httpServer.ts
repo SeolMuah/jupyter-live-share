@@ -74,7 +74,17 @@ function killProcessOnPort(port: number): boolean {
   }
 }
 
-export function startHttpServer(port: number): Promise<http.Server> {
+/**
+ * @param bindAddress listen 인터페이스. 기본 127.0.0.1(루프백) — cloudflared가 localhost로
+ *        접속하므로 터널 공유에 손실이 없고, 터널 실패 폴백 시 LAN 노출도 차단된다.
+ * @param onPortConflict 포트 점유 시 점유 프로세스를 종료해도 되는지 사용자 확인 콜백.
+ *        미제공/거부 시 임의 프로세스를 죽이지 않고 에러로 종료한다.
+ */
+export function startHttpServer(
+  port: number,
+  bindAddress = '127.0.0.1',
+  onPortConflict?: (port: number) => Promise<boolean>
+): Promise<http.Server> {
   return new Promise((resolve, reject) => {
     app = express();
 
@@ -202,11 +212,25 @@ export function startHttpServer(port: number): Promise<http.Server> {
 
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        Logger.warn(`Port ${port} is already in use. Attempting to reclaim...`);
+        Logger.warn(`Port ${port} is already in use.`);
 
-        // 이전 비정상 종료로 포트가 점유된 경우 강제 해제 후 재시도
-        const killed = killProcessOnPort(port);
-        if (killed) {
+        // 점유 프로세스 종료는 사용자 확인을 받은 경우에만 수행한다
+        // (확인 없는 kill -9/taskkill은 무관한 프로세스를 죽일 수 있음).
+        void (async () => {
+          const approved = onPortConflict ? await onPortConflict(port) : false;
+          if (!approved) {
+            reject(new Error(
+              `Port ${port} is already in use. Close the application using it or change the port in settings (codeClassLive.port).`
+            ));
+            return;
+          }
+          const killed = killProcessOnPort(port);
+          if (!killed) {
+            reject(new Error(
+              `Port ${port} is already in use and could not be reclaimed. Change the port in settings (codeClassLive.port).`
+            ));
+            return;
+          }
           // 프로세스 종료 후 OS가 포트를 해제할 시간을 줌
           setTimeout(() => {
             server = http.createServer(app!);
@@ -220,27 +244,23 @@ export function startHttpServer(port: number): Promise<http.Server> {
             server.on('error', (_retryErr: NodeJS.ErrnoException) => {
               Logger.error(`Port ${port} still in use after kill attempt`);
               reject(new Error(
-                `Port ${port} is still in use. Please close the application using it or change the port in settings (jupyterLiveShare.port).`
+                `Port ${port} is still in use. Please close the application using it or change the port in settings (codeClassLive.port).`
               ));
             });
-            server.listen(port, () => {
-              Logger.info(`HTTP server started on port ${port} (after reclaim)`);
+            server.listen(port, bindAddress, () => {
+              Logger.info(`HTTP server started on ${bindAddress}:${port} (after reclaim)`);
               resolve(server!);
             });
           }, 1000);
-        } else {
-          reject(new Error(
-            `Port ${port} is already in use. Change the port in settings (jupyterLiveShare.port).`
-          ));
-        }
+        })();
       } else {
         Logger.error('HTTP server error', err);
         reject(err);
       }
     });
 
-    server.listen(port, () => {
-      Logger.info(`HTTP server started on port ${port}`);
+    server.listen(port, bindAddress, () => {
+      Logger.info(`HTTP server started on ${bindAddress}:${port}`);
       resolve(server!);
     });
   });
