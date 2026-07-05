@@ -212,6 +212,18 @@ export class ViewerPanel {
 
   <!-- 앱 레이아웃 (노트북 + 채팅 사이드바) -->
   <div id="app-layout">
+  <!-- 파일 탐색기 패널 (강사 워크스페이스 트리 — explorer:tree 수신 전엔 숨김) -->
+  <aside id="file-tree-panel" class="file-tree-panel">
+    <div class="file-tree-header">
+      <span class="file-tree-title">EXPLORER</span>
+      <span class="file-tree-root" id="file-tree-root"></span>
+      <button id="file-tree-close" class="file-tree-close-btn" title="Close">&times;</button>
+    </div>
+    <div class="file-tree-body" id="file-tree-body"></div>
+  </aside>
+  <!-- 좁은 화면 드로어용 반투명 배경 (position:fixed라 flex 배치에 영향 없음) -->
+  <div id="file-tree-backdrop" class="file-tree-backdrop"></div>
+
   <!-- 노트북 컨텐츠 -->
   <main id="notebook-container">
     <!-- 설문 배너 -->
@@ -260,6 +272,7 @@ export class ViewerPanel {
 
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
+    <button id="btn-files" style="display:none;" title="Toggle file explorer">Files</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
     <button id="btn-chat" title="Toggle chat">Chat</button>

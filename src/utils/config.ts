@@ -7,6 +7,7 @@ export interface LiveShareConfig {
   bindAddress: string;
   imageMaxWidth: number;
   imageMaxSizeKB: number;
+  shareExplorer: boolean;
 }
 
 export function getConfig(): LiveShareConfig {
@@ -22,5 +23,6 @@ export function getConfig(): LiveShareConfig {
     bindAddress,
     imageMaxWidth: cfg.get<number>('imageMaxWidth', 1280),
     imageMaxSizeKB: cfg.get<number>('imageMaxSizeKB', 2048),
+    shareExplorer: cfg.get<boolean>('shareExplorer', true),
   };
 }

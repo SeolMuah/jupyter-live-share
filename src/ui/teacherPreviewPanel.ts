@@ -231,6 +231,18 @@ export class TeacherPreviewPanel {
   </header>
 
   <div id="app-layout">
+  <!-- 파일 탐색기 패널 (강사 워크스페이스 트리 — explorer:tree 수신 전엔 숨김) -->
+  <aside id="file-tree-panel" class="file-tree-panel">
+    <div class="file-tree-header">
+      <span class="file-tree-title">EXPLORER</span>
+      <span class="file-tree-root" id="file-tree-root"></span>
+      <button id="file-tree-close" class="file-tree-close-btn" title="Close">&times;</button>
+    </div>
+    <div class="file-tree-body" id="file-tree-body"></div>
+  </aside>
+  <!-- 좁은 화면 드로어용 반투명 배경 (position:fixed라 flex 배치에 영향 없음) -->
+  <div id="file-tree-backdrop" class="file-tree-backdrop"></div>
+
   <main id="notebook-container">
     <div id="poll-banner" style="display:none;">
       <div class="poll-question" id="poll-question"></div>
@@ -326,6 +338,7 @@ export class TeacherPreviewPanel {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
       Draw
     </button>
+    <button id="btn-files" style="display:none;" title="Toggle file explorer">Files</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
     <button id="btn-chat" title="Toggle chat">Chat</button>

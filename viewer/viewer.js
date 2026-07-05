@@ -69,6 +69,21 @@
 
   const MAX_CHAT_DOM = 200;
 
+  // === File Tree state (강사 탐색기) ===
+  // explorer:tree를 한 번이라도 받기 전에는 패널·Files 버튼을 아예 노출하지 않는다
+  // (shareExplorer 설정이 꺼진 세션 대응).
+  let fileTreeData = null;          // 마지막으로 수신한 explorer:tree payload
+  let fileTreeReceived = false;
+  let fileTreeVisible = true;       // 넓은 화면(in-flow) 표시 여부 — localStorage로 유지
+  try { fileTreeVisible = localStorage.getItem('jls-tree-visible') !== 'false'; } catch (e) { /* 무시 */ }
+  let fileTreeDrawerOpen = false;   // 좁은 화면 드로어 열림 여부 (세션 한정, 비영속)
+  const expandedTreePaths = new Set(); // 펼쳐진 디렉터리 경로 — 재렌더 시 상태 보존
+  let treeRowByPath = new Map();    // path → { row, childrenBox|null } (렌더마다 재구축)
+  let activeFilePath = null;        // 마지막 filePath — explorer:tree가 늦게 와도 렌더 시 적용
+  // 반응형 모드 감지: 1580px 미만이면 '코드 영역 위주'(드로어) 모드
+  // (1580 = 트리 240 + 코드 992 + 채팅 ~348 — CSS 미디어쿼리와 반드시 일치해야 함)
+  const treeNarrowMQ = window.matchMedia('(max-width: 1579px)');
+
   // DOM elements
   const pinScreen = document.getElementById('pin-screen');
   const pinInput = document.getElementById('pin-input');
@@ -115,6 +130,14 @@
   const pollTextOptions = document.getElementById('poll-text-options');
   const btnPoll = document.getElementById('btn-poll');
   const btnEndPoll = document.getElementById('btn-end-poll');
+
+  // File tree elements
+  const fileTreePanel = document.getElementById('file-tree-panel');
+  const fileTreeRootEl = document.getElementById('file-tree-root');
+  const fileTreeBody = document.getElementById('file-tree-body');
+  const fileTreeClose = document.getElementById('file-tree-close');
+  const fileTreeBackdrop = document.getElementById('file-tree-backdrop');
+  const btnFiles = document.getElementById('btn-files');
 
   // 한글 등 IME 조합 중 Enter는 "글자 확정"이지 제출이 아니다. 조합 확정 Enter와 제출 Enter가
   // keydown을 연달아 발생시켜 채팅이 2번 전송되고, 두 번째가 서버 rate limit(500ms)에 걸려
@@ -212,6 +235,24 @@
         if (chatResizeHandle) chatResizeHandle.style.transition = '';
         if (appLayout) { appLayout.offsetHeight; appLayout.style.transition = ''; }
       }
+    }
+
+    // File tree events (패널·버튼은 explorer:tree 수신 전까지 숨김 상태)
+    btnFiles?.addEventListener('click', toggleFileTree);
+    fileTreeClose?.addEventListener('click', () => closeFileTree());
+    fileTreeBackdrop?.addEventListener('click', () => {
+      fileTreeDrawerOpen = false;
+      applyFileTreeVisibility();
+    });
+    // 넓은 화면 ↔ 좁은 화면 모드 전환 감지 — 드로어 상태를 정리하고 표시 모드 재적용
+    const onTreeModeChange = () => {
+      fileTreeDrawerOpen = false;
+      applyFileTreeVisibility();
+    };
+    if (typeof treeNarrowMQ.addEventListener === 'function') {
+      treeNarrowMQ.addEventListener('change', onTreeModeChange);
+    } else if (typeof treeNarrowMQ.addListener === 'function') {
+      treeNarrowMQ.addListener(onTreeModeChange); // 구형 WebView 폴백
     }
 
     // Chat resize drag
@@ -509,6 +550,10 @@
         handleDocumentFull(msg.data);
         break;
 
+      case 'explorer:tree':
+        handleExplorerTree(msg.data);
+        break;
+
       case 'document:update':
         handleDocumentUpdate(msg.data);
         break;
@@ -654,6 +699,7 @@
     const nbPath = data.filePath || data.fileName || 'notebook.ipynb';
     fileName.textContent = nbPath;
     fileName.title = nbPath;
+    setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트 (트리 미수신 시 경로만 기억)
     Renderer.renderNotebook(data, notebookContainer);
     updateHScrollProxy(); // 노트북 모드에서는 프록시 숨김
 
@@ -695,6 +741,7 @@
     const docPath = data.filePath || data.fileName || 'untitled.txt';
     fileName.textContent = docPath;
     fileName.title = docPath;
+    setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트 (트리 미수신 시 경로만 기억)
     Renderer.renderPlaintextDocument(data, notebookContainer);
     updateHScrollProxy();
 
@@ -837,6 +884,163 @@
         Renderer.scrollToRatio(data.scrollRatio);
       }
     }
+  }
+
+  // === File Tree (강사 탐색기 트리) ===
+
+  function isNarrowTreeLayout() {
+    return treeNarrowMQ.matches;
+  }
+
+  function handleExplorerTree(data) {
+    if (!data || !fileTreePanel) return;
+    fileTreeData = data;
+    fileTreeReceived = true;
+    renderFileTree();
+    applyFileTreeVisibility();
+  }
+
+  // 트리 전체 재렌더. 펼침/접힘 상태는 expandedTreePaths(경로 기준)로 보존된다.
+  // ★ XSS: 파일/폴더명은 신뢰불가 입력 — 반드시 createElement + textContent로만 삽입.
+  function renderFileTree() {
+    if (!fileTreeBody || !fileTreeData) return;
+    if (fileTreeRootEl) fileTreeRootEl.textContent = fileTreeData.root || '';
+    treeRowByPath = new Map();
+    fileTreeBody.innerHTML = ''; // 자식 전부 제거 (빈 문자열 — 외부 입력 아님)
+    const frag = document.createDocumentFragment();
+    buildTreeLevel(Array.isArray(fileTreeData.tree) ? fileTreeData.tree : [], '', 0, frag);
+    if (fileTreeData.truncated) {
+      const note = document.createElement('div');
+      note.className = 'file-tree-truncated';
+      note.textContent = '… (일부 생략)';
+      frag.appendChild(note);
+    }
+    fileTreeBody.appendChild(frag);
+    // 재렌더 후 활성 파일 하이라이트 재적용 (explorer:tree가 filePath보다 늦게 온 경우 포함)
+    if (activeFilePath) setActiveFile(activeFilePath);
+  }
+
+  function buildTreeLevel(nodes, parentPath, depth, container) {
+    for (const node of nodes) {
+      if (!node || typeof node.n !== 'string') continue;
+      const path = parentPath ? parentPath + '/' + node.n : node.n;
+      const row = document.createElement('div');
+      row.className = 'file-tree-row';
+      const isDir = node.t === 'd';
+      // 들여쓰기 12px/depth. 파일 행은 twisty(12px)가 없으므로 12px 보정해 이름 정렬을 맞춘다.
+      row.style.paddingLeft = (8 + depth * 12 + (isDir ? 0 : 12)) + 'px';
+
+      if (isDir) {
+        row.classList.add('dir');
+        const twisty = document.createElement('span');
+        twisty.className = 'tree-twisty';
+        row.appendChild(twisty);
+        const name = document.createElement('span');
+        name.className = 'tree-name';
+        name.textContent = node.n;
+        row.appendChild(name);
+        container.appendChild(row);
+
+        const childrenBox = document.createElement('div');
+        childrenBox.className = 'file-tree-children';
+        buildTreeLevel(Array.isArray(node.c) ? node.c : [], path, depth + 1, childrenBox);
+        container.appendChild(childrenBox);
+
+        const expanded = expandedTreePaths.has(path);
+        row.classList.toggle('expanded', expanded);
+        childrenBox.style.display = expanded ? '' : 'none';
+
+        row.addEventListener('click', () => {
+          const nowExpanded = !expandedTreePaths.has(path);
+          if (nowExpanded) expandedTreePaths.add(path);
+          else expandedTreePaths.delete(path);
+          row.classList.toggle('expanded', nowExpanded);
+          childrenBox.style.display = nowExpanded ? '' : 'none';
+        });
+
+        treeRowByPath.set(path, { row, childrenBox });
+      } else {
+        // 파일 행: 클릭 무반응 (강사가 공유 중인 파일만 라이브)
+        row.classList.add('file');
+        const name = document.createElement('span');
+        name.className = 'tree-name';
+        name.textContent = node.n;
+        row.appendChild(name);
+        container.appendChild(row);
+        treeRowByPath.set(path, { row, childrenBox: null });
+      }
+    }
+  }
+
+  // 활성 파일 하이라이트: notebook:full/document:full의 filePath('/' 구분 상대경로) 사용.
+  // 트리를 아직 못 받았으면 경로만 기억해 두었다가 renderFileTree()가 재적용한다.
+  function setActiveFile(filePath) {
+    activeFilePath = filePath || null;
+    if (!fileTreeBody) return;
+    const prev = fileTreeBody.querySelector('.file-tree-row.active');
+    if (prev) prev.classList.remove('active');
+    if (!activeFilePath || !fileTreeReceived) return;
+    const entry = treeRowByPath.get(activeFilePath);
+    if (!entry) return; // 트리에 없는 경로는 무시
+    // 조상 디렉터리 자동 펼침
+    const parts = activeFilePath.split('/');
+    let prefix = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+      const dir = treeRowByPath.get(prefix);
+      if (dir && dir.childrenBox) {
+        expandedTreePaths.add(prefix);
+        dir.row.classList.add('expanded');
+        dir.childrenBox.style.display = '';
+      }
+    }
+    entry.row.classList.add('active');
+    entry.row.scrollIntoView({ block: 'nearest' });
+  }
+
+  function toggleFileTree() {
+    if (!fileTreeReceived) return;
+    if (isNarrowTreeLayout()) {
+      fileTreeDrawerOpen = !fileTreeDrawerOpen; // 좁은 화면: 드로어 토글 (비영속)
+    } else {
+      fileTreeVisible = !fileTreeVisible;
+      try { localStorage.setItem('jls-tree-visible', fileTreeVisible ? 'true' : 'false'); } catch (e) { /* 무시 */ }
+    }
+    applyFileTreeVisibility();
+  }
+
+  function closeFileTree() {
+    if (isNarrowTreeLayout()) {
+      fileTreeDrawerOpen = false;
+    } else {
+      fileTreeVisible = false;
+      try { localStorage.setItem('jls-tree-visible', 'false'); } catch (e) { /* 무시 */ }
+    }
+    applyFileTreeVisibility();
+  }
+
+  // 현재 모드(넓음=in-flow / 좁음=드로어)와 상태에 맞게 클래스를 정리한다.
+  // 표시 여부 자체는 CSS 미디어쿼리가 최종 게이트라, 잘못된 모드의 클래스가 남아도 화면엔 안 나온다.
+  function applyFileTreeVisibility() {
+    if (!fileTreePanel) return;
+    if (btnFiles) btnFiles.style.display = fileTreeReceived ? '' : 'none';
+    if (!fileTreeReceived) {
+      fileTreePanel.classList.remove('visible', 'drawer-open');
+      fileTreeBackdrop?.classList.remove('visible');
+      return;
+    }
+    if (isNarrowTreeLayout()) {
+      fileTreePanel.classList.remove('visible');
+      fileTreePanel.classList.toggle('drawer-open', fileTreeDrawerOpen);
+      fileTreeBackdrop?.classList.toggle('visible', fileTreeDrawerOpen);
+    } else {
+      fileTreeDrawerOpen = false;
+      fileTreePanel.classList.remove('drawer-open');
+      fileTreeBackdrop?.classList.remove('visible');
+      fileTreePanel.classList.toggle('visible', fileTreeVisible);
+    }
+    // 트리 표시/숨김으로 #notebook-container의 좌우 위치가 바뀔 수 있음 → 가로 스크롤 프록시 재정렬
+    updateHScrollProxy();
   }
 
   // === Chat ===

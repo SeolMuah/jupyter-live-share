@@ -1901,3 +1901,176 @@ footer label {
 #draw-clear {
   color: var(--error-text);
 }
+
+/* === File Tree Panel (강사 탐색기 트리) ===
+   기본은 숨김 — explorer:tree를 한 번이라도 받은 뒤에만 JS가 .visible/.drawer-open을 붙인다.
+   표시 모드는 CSS 미디어쿼리가 최종 게이트: .visible은 넓은 화면(≥1580px) 전용 in-flow 패널,
+   .drawer-open은 좁은 화면(<1580px) 전용 fixed 드로어. 1580 = 트리 240 + 코드 992 + 채팅 ~348
+   — 채팅과 트리를 동시에 열어도 가로 스크롤이 생기지 않는 최소폭. 잘못된 모드의 클래스가 남아도 안 보인다.
+   ⚠️ #notebook-container(992px 고정, drawing.js가 강제)는 절대 건드리지 않는다 — aside는
+   #app-layout(flex)의 첫 자식으로만 자리를 차지하므로 판서 좌표계에 영향 없음. */
+.file-tree-panel {
+  display: none;
+  background: var(--bg-primary);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 넓은 화면: in-flow 상주 패널. sticky로 스크롤과 무관하게 화면에 붙고 자체 스크롤을 가진다. */
+@media (min-width: 1580px) {
+  .file-tree-panel.visible {
+    display: flex;
+    width: 240px;
+    min-width: 240px;
+    flex: none;
+    position: sticky;
+    top: var(--header-height);
+    align-self: flex-start;
+    height: calc(100vh - var(--header-height) - var(--footer-height));
+    border-right: 1px solid var(--border-color);
+  }
+}
+
+/* 좁은 화면: 코드 영역 위주 — Files 버튼으로 여는 좌측 오버레이 드로어 (헤더 아래~툴바 위) */
+@media (max-width: 1579px) {
+  .file-tree-panel.drawer-open {
+    display: flex;
+    position: fixed;
+    top: var(--header-height);
+    bottom: var(--footer-height);
+    left: 0;
+    width: 260px;
+    max-width: 80vw;
+    z-index: 345; /* backdrop(344) 위, footer(350) 아래 */
+    border-right: 1px solid var(--border-color);
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.15);
+  }
+}
+
+[data-theme="dark"] .file-tree-panel.drawer-open {
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
+}
+
+/* 드로어 뒤 반투명 배경 — 클릭 시 닫힘 (JS). 기본 숨김, 좁은 화면에서만 JS가 .visible 부여 */
+.file-tree-backdrop {
+  display: none;
+  position: fixed;
+  top: var(--header-height);
+  bottom: var(--footer-height);
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 344; /* hscroll-proxy(340) 위, 드로어(345) 아래 */
+}
+.file-tree-backdrop.visible {
+  display: block;
+}
+
+.file-tree-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-height: 34px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.file-tree-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.file-tree-root {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-close-btn {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.file-tree-close-btn:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.file-tree-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+/* 트리 행: VS Code 탐색기 느낌의 컴팩트한 22px 행 */
+.file-tree-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding-right: 8px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  user-select: none;
+}
+.file-tree-row:hover {
+  background: var(--bg-secondary);
+}
+.file-tree-row.dir {
+  cursor: pointer;
+}
+.file-tree-row.file {
+  cursor: default; /* 파일 행은 클릭 무반응 — 강사의 공유 파일만 라이브 */
+}
+.file-tree-row.active {
+  background: var(--bg-active);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 디렉터리 삼각형(▸/▾): CSS border 삼각형 + 회전 (외부 아이콘 리소스 금지) */
+.tree-twisty {
+  width: 12px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tree-twisty::before {
+  content: '';
+  border-left: 5px solid var(--text-secondary);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease-out;
+}
+.file-tree-row.dir.expanded .tree-twisty::before {
+  transform: rotate(90deg);
+}
+
+.file-tree-truncated {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

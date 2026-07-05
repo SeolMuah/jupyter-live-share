@@ -3,6 +3,8 @@ import * as path from 'path';
 import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync, setLastScrollSync } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
+import { getConfig } from '../utils/config';
+import { startExplorerWatch, stopExplorerWatch, getExplorerTree } from './explorerTree';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot, setOnImagesOptimized } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
@@ -517,6 +519,15 @@ function setupNewViewerHandler() {
     if (scrollState) {
       sendTo(ws, 'scroll:sync', scrollState);
     }
+
+    // 탐색기 트리 공유가 켜져 있고 캐시가 준비됐으면 새 접속자에게 전송
+    // (재빌드 없이 캐시 재사용 — 뷰어는 이 이벤트를 못 받으면 트리 UI를 노출하지 않음)
+    if (getConfig().shareExplorer) {
+      const explorerTree = getExplorerTree();
+      if (explorerTree) {
+        sendTo(ws, 'explorer:tree', explorerTree);
+      }
+    }
   });
 }
 
@@ -530,6 +541,10 @@ export function startWatching() {
 
   // Register new viewer handler once (handles both notebook and plaintext modes)
   setupNewViewerHandler();
+
+  // 탐색기 트리 공유 — 게이트는 explorerTree 내부에서 전송 시점마다 재확인한다
+  // (설정이 꺼져 있으면 어떤 경로로도 전송 없음, 수업 중 켜고 끄기도 즉시 반영).
+  startExplorerWatch();
 
   // 1) 포커스된 노트북 에디터 우선
   const activeNotebook = vscode.window.activeNotebookEditor;
@@ -1142,6 +1157,9 @@ export function stopWatching() {
     disposable.dispose();
   }
   disposables = [];
+
+  // 탐색기 트리 감시 정리 (설정과 무관하게 항상 호출 — idempotent라 안전)
+  stopExplorerWatch();
 
   // Flush: send final cell state for every pending trailing timer before stopping
   // (prevent last-keystroke loss).
