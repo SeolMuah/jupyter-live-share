@@ -76,13 +76,17 @@
   let fileTreeReceived = false;
   let fileTreeVisible = true;       // 넓은 화면(in-flow) 표시 여부 — localStorage로 유지
   try { fileTreeVisible = localStorage.getItem('jls-tree-visible') !== 'false'; } catch (e) { /* 무시 */ }
-  let fileTreeDrawerOpen = false;   // 좁은 화면 드로어 열림 여부 (세션 한정, 비영속)
+  let fileTreeForcedOpen = false;   // 여유 부족 상태에서 버튼으로 '강제로 연' 상태 (세션 한정, 비영속)
   const expandedTreePaths = new Set(); // 펼쳐진 디렉터리 경로 — 재렌더 시 상태 보존
   let treeRowByPath = new Map();    // path → { row, childrenBox|null } (렌더마다 재구축)
   let activeFilePath = null;        // 마지막 filePath — explorer:tree가 늦게 와도 렌더 시 적용
-  // 반응형 모드 감지: 1580px 미만이면 '코드 영역 위주'(드로어) 모드
-  // (1580 = 트리 240 + 코드 992 + 채팅 ~348 — CSS 미디어쿼리와 반드시 일치해야 함)
-  const treeNarrowMQ = window.matchMedia('(max-width: 1579px)');
+  // 반응형 모드 감지: 고정 브레이크포인트가 아니라 '실제 여유 공간'으로 동적 판정.
+  // 필요폭 = 트리 240 + 코드 992(판서 좌표계 고정폭) + (채팅이 열려 있으면 채팅 실측 폭).
+  // 채팅을 닫으면(또는 접으면) 같은 뷰포트에서도 여유가 생겨 트리가 자동으로 in-flow 표시된다.
+  const TREE_PANEL_WIDTH = 240;
+  const CODE_AREA_WIDTH = 992;
+  const TREE_MODE_BUFFER = 24; // 스크롤바/보더 여유
+  let lastTreeNarrow = null;   // 모드 전환 감지용 (전환 시 드로어 상태 정리)
 
   // DOM elements
   const pinScreen = document.getElementById('pin-screen');
@@ -136,7 +140,6 @@
   const fileTreeRootEl = document.getElementById('file-tree-root');
   const fileTreeBody = document.getElementById('file-tree-body');
   const fileTreeClose = document.getElementById('file-tree-close');
-  const fileTreeBackdrop = document.getElementById('file-tree-backdrop');
   const btnFiles = document.getElementById('btn-files');
 
   // 한글 등 IME 조합 중 Enter는 "글자 확정"이지 제출이 아니다. 조합 확정 Enter와 제출 Enter가
@@ -240,20 +243,13 @@
     // File tree events (패널·버튼은 explorer:tree 수신 전까지 숨김 상태)
     btnFiles?.addEventListener('click', toggleFileTree);
     fileTreeClose?.addEventListener('click', () => closeFileTree());
-    fileTreeBackdrop?.addEventListener('click', () => {
-      fileTreeDrawerOpen = false;
-      applyFileTreeVisibility();
+    // 여유 공간 변화(창 리사이즈) 감지 — rAF로 합쳐서 표시 모드 재평가.
+    // 채팅 열기/닫기·채팅 폭 드래그도 여유를 바꾸므로 각 지점에서 refreshTreeMode()를 호출한다.
+    let treeModeRAF = 0;
+    window.addEventListener('resize', () => {
+      cancelAnimationFrame(treeModeRAF);
+      treeModeRAF = requestAnimationFrame(refreshTreeMode);
     });
-    // 넓은 화면 ↔ 좁은 화면 모드 전환 감지 — 드로어 상태를 정리하고 표시 모드 재적용
-    const onTreeModeChange = () => {
-      fileTreeDrawerOpen = false;
-      applyFileTreeVisibility();
-    };
-    if (typeof treeNarrowMQ.addEventListener === 'function') {
-      treeNarrowMQ.addEventListener('change', onTreeModeChange);
-    } else if (typeof treeNarrowMQ.addListener === 'function') {
-      treeNarrowMQ.addListener(onTreeModeChange); // 구형 WebView 폴백
-    }
 
     // Chat resize drag
     initChatResize();
@@ -889,7 +885,27 @@
   // === File Tree (강사 탐색기 트리) ===
 
   function isNarrowTreeLayout() {
-    return treeNarrowMQ.matches;
+    // 데스크톱에서 채팅이 열려 있으면(접힘 아님) 그 실측 폭만큼 여유가 줄어든다.
+    // (채팅 폭은 드래그로 240~600px 가변 — 상수가 아니라 offsetWidth로 읽는다.)
+    let chatW = 0;
+    if (chatVisible && window.innerWidth > 768 && chatPanel && !chatPanel.classList.contains('collapsed')) {
+      // 채팅 패널은 width 트랜지션(0.2s)이 있어 열리는 순간의 offsetWidth는 과도기 값 —
+      // 정착 폭인 CSS 변수(--chat-width, 드래그 리사이즈도 이 변수를 갱신)를 읽는다.
+      const cssW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-width'), 10);
+      chatW = cssW || chatPanel.offsetWidth || 340;
+    }
+    return window.innerWidth < TREE_PANEL_WIDTH + CODE_AREA_WIDTH + chatW + TREE_MODE_BUFFER;
+  }
+
+  // 여유 공간이 바뀌는 모든 지점(리사이즈·채팅 토글·채팅 폭 드래그)에서 호출 —
+  // 여유 있음/없음이 '전환'될 때 강제 열림 상태를 정리해 자동 규칙(여유 기반)으로 복귀시킨다.
+  function refreshTreeMode() {
+    const narrow = isNarrowTreeLayout();
+    if (lastTreeNarrow !== null && narrow !== lastTreeNarrow) {
+      fileTreeForcedOpen = false;
+    }
+    lastTreeNarrow = narrow;
+    applyFileTreeVisibility();
   }
 
   function handleExplorerTree(data) {
@@ -897,7 +913,7 @@
     fileTreeData = data;
     fileTreeReceived = true;
     renderFileTree();
-    applyFileTreeVisibility();
+    refreshTreeMode();
   }
 
   // 트리 전체 재렌더. 펼침/접힘 상태는 expandedTreePaths(경로 기준)로 보존된다.
@@ -999,11 +1015,14 @@
   }
 
   function toggleFileTree() {
-    if (!fileTreeReceived) return;
+    if (!fileTreeReceived || !fileTreePanel) return;
+    const shown = fileTreePanel.classList.contains('visible');
     if (isNarrowTreeLayout()) {
-      fileTreeDrawerOpen = !fileTreeDrawerOpen; // 좁은 화면: 드로어 토글 (비영속)
+      // 여유 부족: 강제 열기/닫기 (비영속 — 여유가 회복되면 자동 규칙으로 복귀).
+      // 강제로 열면 트리가 코드 왼쪽을 in-flow로 차지하고 가로 스크롤이 생길 수 있다(의도).
+      fileTreeForcedOpen = !shown;
     } else {
-      fileTreeVisible = !fileTreeVisible;
+      fileTreeVisible = !shown;
       try { localStorage.setItem('jls-tree-visible', fileTreeVisible ? 'true' : 'false'); } catch (e) { /* 무시 */ }
     }
     applyFileTreeVisibility();
@@ -1011,7 +1030,7 @@
 
   function closeFileTree() {
     if (isNarrowTreeLayout()) {
-      fileTreeDrawerOpen = false;
+      fileTreeForcedOpen = false;
     } else {
       fileTreeVisible = false;
       try { localStorage.setItem('jls-tree-visible', 'false'); } catch (e) { /* 무시 */ }
@@ -1019,26 +1038,18 @@
     applyFileTreeVisibility();
   }
 
-  // 현재 모드(넓음=in-flow / 좁음=드로어)와 상태에 맞게 클래스를 정리한다.
-  // 표시 여부 자체는 CSS 미디어쿼리가 최종 게이트라, 잘못된 모드의 클래스가 남아도 화면엔 안 나온다.
+  // 표시 모드는 in-flow 단일 — 오버레이가 아니라 항상 코드 왼쪽에 자리를 차지한다.
+  // 여유가 있으면 사용자 선호(fileTreeVisible, 영속)를, 여유가 없으면 자동 닫힘을 따르되
+  // 버튼으로 강제로 연 경우(fileTreeForcedOpen)는 가로 스크롤을 감수하고 연다.
   function applyFileTreeVisibility() {
     if (!fileTreePanel) return;
     if (btnFiles) btnFiles.style.display = fileTreeReceived ? '' : 'none';
     if (!fileTreeReceived) {
-      fileTreePanel.classList.remove('visible', 'drawer-open');
-      fileTreeBackdrop?.classList.remove('visible');
+      fileTreePanel.classList.remove('visible');
       return;
     }
-    if (isNarrowTreeLayout()) {
-      fileTreePanel.classList.remove('visible');
-      fileTreePanel.classList.toggle('drawer-open', fileTreeDrawerOpen);
-      fileTreeBackdrop?.classList.toggle('visible', fileTreeDrawerOpen);
-    } else {
-      fileTreeDrawerOpen = false;
-      fileTreePanel.classList.remove('drawer-open');
-      fileTreeBackdrop?.classList.remove('visible');
-      fileTreePanel.classList.toggle('visible', fileTreeVisible);
-    }
+    const shown = isNarrowTreeLayout() ? fileTreeForcedOpen : fileTreeVisible;
+    fileTreePanel.classList.toggle('visible', shown);
     // 트리 표시/숨김으로 #notebook-container의 좌우 위치가 바뀔 수 있음 → 가로 스크롤 프록시 재정렬
     updateHScrollProxy();
   }
@@ -1157,6 +1168,10 @@
 
     // Update draw tools position
     updateDrawToolsPosition();
+
+    // 채팅 열림/닫힘은 트리의 여유 공간도 바꿈 → 표시 모드 재평가
+    // (채팅을 닫으면 같은 뷰포트에서도 트리가 자동으로 in-flow 표시된다)
+    refreshTreeMode();
 
     // 채팅 열림/닫힘으로 코드 영역 폭이 바뀜 → 가로 스크롤 프록시 재정렬
     // (레이아웃 트랜지션 0.25s 후에도 한 번 더 갱신)
@@ -1535,6 +1550,8 @@
       if (currentWidth) {
         localStorage.setItem('jls-chat-width', currentWidth);
       }
+      // 채팅 폭 변화도 트리 여유 공간을 바꿈 → 표시 모드 재평가
+      refreshTreeMode();
       updateDrawToolsPosition();
     });
   }

@@ -222,7 +222,6 @@ export class ViewerPanel {
     <div class="file-tree-body" id="file-tree-body"></div>
   </aside>
   <!-- 좁은 화면 드로어용 반투명 배경 (position:fixed라 flex 배치에 영향 없음) -->
-  <div id="file-tree-backdrop" class="file-tree-backdrop"></div>
 
   <!-- 노트북 컨텐츠 -->
   <main id="notebook-container">
@@ -272,7 +271,7 @@ export class ViewerPanel {
 
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
-    <button id="btn-files" style="display:none;" title="Toggle file explorer">Files</button>
+    <button id="btn-files" style="display:none;" title="Toggle file explorer">Explorer</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
     <button id="btn-chat" title="Toggle chat">Chat</button>

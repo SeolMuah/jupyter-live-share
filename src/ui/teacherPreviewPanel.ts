@@ -241,7 +241,6 @@ export class TeacherPreviewPanel {
     <div class="file-tree-body" id="file-tree-body"></div>
   </aside>
   <!-- 좁은 화면 드로어용 반투명 배경 (position:fixed라 flex 배치에 영향 없음) -->
-  <div id="file-tree-backdrop" class="file-tree-backdrop"></div>
 
   <main id="notebook-container">
     <div id="poll-banner" style="display:none;">
@@ -338,7 +337,7 @@ export class TeacherPreviewPanel {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
       Draw
     </button>
-    <button id="btn-files" style="display:none;" title="Toggle file explorer">Files</button>
+    <button id="btn-files" style="display:none;" title="Toggle file explorer">Explorer</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
     <button id="btn-chat" title="Toggle chat">Chat</button>
