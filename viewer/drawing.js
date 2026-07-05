@@ -481,10 +481,20 @@ const Drawing = (() => {
 
   // --- Toolbar ---
 
+  // 정적 DOM(footer의 draw-toggle, 도구 패널 버튼들)은 destroy()로 파괴되지 않으므로
+  // 리스너 배선은 페이지당 1회만 한다. Teacher Preview는 로드 직후 init → connect 시
+  // destroy+재init을 거치는데(자기 치유/세션 재시작 포함), 가드 없이 매번 배선하면
+  // 같은 토글에 익명 리스너가 누적돼 클릭 1번에 짝수 번 토글 = '눌러도 무반응'이 된다.
+  let toolbarWired = false;
+
   function setupToolbar() {
+    if (toolbarWired) return;
+    toolbarWired = true;
+
     const toggle = document.getElementById('draw-toggle');
     if (toggle) {
       toggle.addEventListener('click', () => {
+        if (!canvas) return; // destroy 직후(세션 없음) 클릭 방어
         drawingMode = !drawingMode;
         toggle.classList.toggle('active', drawingMode);
         if (toolsPanel) toolsPanel.style.display = drawingMode ? 'flex' : 'none';
