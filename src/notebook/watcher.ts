@@ -6,16 +6,19 @@ import { Logger } from '../utils/logger';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot, setOnImagesOptimized } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
-const TEXT_DEBOUNCE_MS = 100;
+// document:update 스로틀 (leading+trailing): 전체 문서 텍스트를 실어 나르므로 셀보다
+// 간격을 넉넉히 잡되, 연타 중에도 이 간격마다 중간 상태가 전송돼 글자가 실시간으로 보인다.
+const TEXT_THROTTLE_MS = 150;
 const THROTTLE_MS = 100; // 셀 포커스 추적 반응성 개선 (200→100)
 const CURSOR_THROTTLE_MS = 30; // Cursor updates need fastest response (50→30)
 const VIEWPORT_THROTTLE_MS = 100; // Viewport sync needs fast but not excessive updates
-// Trailing-edge debounce per cell for cell:update (keystroke coalescing). A burst of
-// keystrokes within this window collapses to a single broadcast carrying the LATEST
-// source — the flush always re-reads the live cell document at fire time, so no
-// intermediate OR final keystroke is ever lost, only the intermediate broadcasts are
-// coalesced. Cell-switch/blur/stop paths flush any pending timer immediately.
-const CELL_UPDATE_DEBOUNCE_MS = 40;
+// cell:update 스로틀 (leading+trailing, cell:output과 동일 패턴). 과거 trailing 디바운스는
+// 키를 누르고 있는 동안(키 반복 간격 < 창) 타이머가 계속 리셋되어 전송이 0회 → 학생 화면에
+// 커서만 움직이고 글자는 키를 떼야 반영됐다. 스로틀은 연타/지우기 홀드 중에도 이 간격마다
+// 중간 상태를 브로드캐스트해 글자가 커서처럼 따라온다. flush가 fire 시점에 라이브 셀
+// 텍스트를 다시 읽으므로 중간·최종 키 입력은 유실되지 않고(중간 '브로드캐스트'만 합쳐짐),
+// trailing 타이머가 마지막 상태를 반드시 한 번 더 보낸다. 셀 전환/블러/정지 경로는 즉시 flush.
+const CELL_UPDATE_THROTTLE_MS = 100;
 // cell:output 스로틀: tqdm/진행바처럼 초당 수십~수백 회 갱신되는 스트리밍 출력이 100명에게
 // 매 프레임 폭주하는 것을 억제한다. leading+trailing 방식이라 최종 출력은 반드시 전달된다
 // (trailing fire 시 currentNotebook에서 셀 출력을 다시 읽어 그 순간의 최신 상태를 보냄).
@@ -28,10 +31,13 @@ const SYNC_DEBUG = false;
 const IMAGE_RELEVANT_LANGUAGES = new Set(['markdown', 'html', 'jupyter']);
 
 let disposables: vscode.Disposable[] = [];
-const debounceTimers: Map<number, NodeJS.Timeout> = new Map();
+const cellUpdateTrailingTimers: Map<number, NodeJS.Timeout> = new Map(); // cell:update 스로틀용 셀별 trailing 타이머
+const lastCellUpdateTimes: Map<number, number> = new Map();          // 셀별 마지막 cell:update 전송 시각
 const outputTrailingTimers: Map<number, NodeJS.Timeout> = new Map(); // cell:output 스로틀용 셀별 trailing 타이머
 const lastOutputTimes: Map<number, number> = new Map();              // 셀별 마지막 cell:output 전송 시각
-let textDebounceTimer: NodeJS.Timeout | null = null;
+let textTrailingTimer: NodeJS.Timeout | null = null;
+let lastTextUpdateTime = 0;
+let lastTextSentLength = 0; // 마지막 전송 문서 길이 — 대용량 파일 스로틀 간격 확대 판정용
 let lastFocusTime = 0;
 let lastCursorTime = 0;
 let cursorTrailingTimer: NodeJS.Timeout | null = null;
@@ -197,16 +203,16 @@ function broadcastViewportScroll(data: unknown) {
 }
 
 /**
- * Flush a single cell's pending debounced cell:update immediately, sending the
+ * Flush a single cell's pending throttled cell:update immediately, sending the
  * LATEST live source (re-read from the notebook at call time, not whatever was
  * captured when the timer was scheduled). Safe to call redundantly — it always
- * clears/deletes the timer entry first. Used by the debounce trailing edge, the
- * cell-switch flush, and stopWatching's final flush so no keystroke is ever lost.
+ * clears/deletes the timer entry first. Used by the throttle leading/trailing edges,
+ * the cell-switch flush, and stopWatching's final flush so no keystroke is ever lost.
  */
 function flushCellUpdate(cellIndex: number) {
-  const timer = debounceTimers.get(cellIndex);
+  const timer = cellUpdateTrailingTimers.get(cellIndex);
   if (timer) clearTimeout(timer);
-  debounceTimers.delete(cellIndex);
+  cellUpdateTrailingTimers.delete(cellIndex);
 
   if (!currentNotebook) return;
   if (cellIndex < 0 || cellIndex >= currentNotebook.cellCount) return;
@@ -214,11 +220,12 @@ function flushCellUpdate(cellIndex: number) {
   const cell = currentNotebook.cellAt(cellIndex);
   const text = cell.document.getText();
   lastSentSources.set(cellIndex, text);
+  lastCellUpdateTimes.set(cellIndex, Date.now());
   const isMarkup = cell.kind === vscode.NotebookCellKind.Markup;
   const resolvedText = (imageShareEnabled && isMarkup)
     ? resolveLocalImagesCacheOnly(text, getBaseDir())
     : text;
-  if (SYNC_DEBUG) Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${resolvedText.length} (debounce flush)`);
+  if (SYNC_DEBUG) Logger.info(`[SYNC] cell:update idx=${cellIndex} len=${resolvedText.length} (throttle flush)`);
   broadcast('cell:update', { index: cellIndex, source: resolvedText });
 }
 
@@ -315,10 +322,11 @@ function flushAndResetState() {
     clearTimeout(viewportTrailingTimer);
     viewportTrailingTimer = null;
   }
-  for (const timer of debounceTimers.values()) {
+  for (const timer of cellUpdateTrailingTimers.values()) {
     clearTimeout(timer);
   }
-  debounceTimers.clear();
+  cellUpdateTrailingTimers.clear();
+  lastCellUpdateTimes.clear();
   // cell:output 스로틀 타이머도 정리 — 이전 파일에서 예약된 trailing이 전환 후 발화해
   // 새 파일에 엉뚱한 셀 출력을 보내는 것을 막는다.
   for (const timer of outputTrailingTimers.values()) {
@@ -333,14 +341,16 @@ function flushAndResetState() {
     syncBackupTimer = null;
   }
   invalidateNotebookFullCache();
-  if (textDebounceTimer) {
-    clearTimeout(textDebounceTimer);
-    textDebounceTimer = null;
+  if (textTrailingTimer) {
+    clearTimeout(textTrailingTimer);
+    textTrailingTimer = null;
   }
   // Reset throttle timestamps → first event for new file passes immediately
   lastFocusTime = 0;
   lastCursorTime = 0;
   lastViewportTime = 0;
+  lastTextUpdateTime = 0;
+  lastTextSentLength = 0;
   lastActiveCellIndex = -1;
   lastSentSources.clear();
 }
@@ -611,25 +621,37 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       if (event.notebook.uri.toString() !== currentNotebook.uri.toString()) return;
 
       // 어떤 변경이든(셀 내용/출력/구조) 즉시 캐시 무효화 — 다음 join은 항상 최신 상태를 받는다.
-      // (cell:update 자체는 debounce 될 수 있지만, 캐시는 여기서 즉시 비우고 다음 접속 시
-      // serializeNotebook이 그 시점의 live 텍스트를 다시 읽으므로 debounce 타이밍과 무관하게 최신이다)
+      // (cell:update 자체는 스로틀될 수 있지만, 캐시는 여기서 즉시 비우고 다음 접속 시
+      // serializeNotebook이 그 시점의 live 텍스트를 다시 읽으므로 스로틀 타이밍과 무관하게 최신이다)
       invalidateNotebookFullCache();
+
+      // 구조 변경(셀 추가/삭제)이 섞인 컴파운드 이벤트 여부 — 아래 두 곳에서 사용.
+      // leading 즉시 전송이 이 가드보다 먼저 실행되면 밀린 인덱스로 다른 셀에 내용이
+      // 칠해질 수 있으므로, 구조 변경 이벤트에서는 내용 전송을 아예 건너뛴다
+      // (구 디바운스 시절과 동일 의미 — cells:structure와 다음 편집/백업이 내용을 나른다).
+      const hasStructureChange = event.contentChanges.length > 0;
 
       // 셀 내용 변경 (타이핑)
       for (const change of event.cellChanges) {
-        if (change.document) {
+        if (change.document && !hasStructureChange) {
           const cellIndex = change.cell.index;
 
-          // ★ 짧은 trailing debounce로 키 입력 버스트를 하나로 합친다 (H3).
-          // flushCellUpdate가 fire 시점에 change.cell.document가 아니라 currentNotebook에서
-          // 셀을 다시 조회해 항상 "그 순간의 최신 소스"를 읽으므로, 몇 번을 눌러도 마지막
-          // 키 입력이 유실되지 않는다. 셀 전환/블러/정지 경로가 모두 이 타이머를 즉시 flush한다.
-          const existing = debounceTimers.get(cellIndex);
-          if (existing) clearTimeout(existing);
-          const timer = setTimeout(() => {
-            runSafely('cell:update debounce flush', () => flushCellUpdate(cellIndex));
-          }, CELL_UPDATE_DEBOUNCE_MS);
-          debounceTimers.set(cellIndex, timer);
+          // ★ leading+trailing 스로틀 (cell:output과 동일 패턴). 첫 키는 즉시 전송(leading),
+          // 연타 중에는 CELL_UPDATE_THROTTLE_MS마다 중간 상태가 전송되고, 마지막 상태는
+          // trailing 타이머가 보장한다. flushCellUpdate가 fire 시점에 currentNotebook에서
+          // 셀을 다시 조회해 항상 "그 순간의 최신 소스"를 읽으므로 키 입력이 유실되지 않는다.
+          // 셀 전환/블러/정지 경로가 모두 대기 중 타이머를 즉시 flush한다.
+          const now = Date.now();
+          const since = now - (lastCellUpdateTimes.get(cellIndex) || 0);
+          if (since < CELL_UPDATE_THROTTLE_MS) {
+            const existing = cellUpdateTrailingTimers.get(cellIndex);
+            if (existing) clearTimeout(existing);
+            cellUpdateTrailingTimers.set(cellIndex, setTimeout(() => {
+              runSafely('cell:update trailing flush', () => flushCellUpdate(cellIndex));
+            }, CELL_UPDATE_THROTTLE_MS - since));
+          } else {
+            runSafely('cell:update leading send', () => flushCellUpdate(cellIndex));
+          }
         }
 
         if (change.outputs) {
@@ -641,11 +663,15 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
       // 구조 변경(셀 추가/삭제)이 있는 이벤트면, 인덱스 기반 대기 타이머를 모두 취소한다.
       // 인덱스가 밀린 뒤 flush되면 다른 셀의 내용/출력을 잘못된 index로 보낼 수 있기 때문.
       // (안전 우선: 잘못된 내용 전송을 막는다. 취소된 마지막 편집분은 다음 편집/백업으로 보정됨.)
-      if (event.contentChanges.length > 0) {
-        for (const timer of debounceTimers.values()) clearTimeout(timer);
-        debounceTimers.clear();
+      if (hasStructureChange) {
+        for (const timer of cellUpdateTrailingTimers.values()) clearTimeout(timer);
+        cellUpdateTrailingTimers.clear();
         for (const timer of outputTrailingTimers.values()) clearTimeout(timer);
         outputTrailingTimers.clear();
+        // 타임스탬프도 초기화 — 인덱스가 밀려 다른 셀의 시각이 되므로, 구조 변경 후
+        // 각 셀의 첫 편집이 스로틀에 걸리지 않고 즉시(leading) 전송되게 한다.
+        lastCellUpdateTimes.clear();
+        lastOutputTimes.clear();
       }
 
       // 셀 구조 변경 (추가/삭제)
@@ -680,7 +706,7 @@ function startWatchingNotebook(notebook: vscode.NotebookDocument) {
 
         // 셀 전환 시: 이전 셀의 pending cell:update를 즉시 flush (마지막 글자 누락 방지)
         if (activeCellIndex !== lastActiveCellIndex) {
-          for (const idx of [...debounceTimers.keys()]) {
+          for (const idx of [...cellUpdateTrailingTimers.keys()]) {
             if (idx !== activeCellIndex) {
               flushCellUpdate(idx);
             }
@@ -870,23 +896,46 @@ function setupTextDocumentWatcher() {
     return true;
   });
 
+  // 현재 문서의 최신 텍스트를 지금 즉시 전송한다. currentTextDocument에서 다시 읽으므로
+  // trailing 타이머가 fire될 때도 그 순간의 최신 내용이 나간다 (마지막 키 입력 유실 없음).
+  const sendDocumentUpdate = () => {
+    if (!currentTextDocument) return;
+    lastTextUpdateTime = Date.now();
+    let content = currentTextDocument.getText();
+    lastTextSentLength = content.length;
+    // Only resolve images for markdown/html documents (cache-only for real-time typing)
+    if (isImageRelevantTextDocument()) {
+      content = resolveTextImagesRealtime(content, getBaseDir());
+    }
+    broadcast('document:update', { content });
+  };
+
+  // document:update는 전체 문서 텍스트를 실어 나르므로, 문서가 클수록 간격을 늘려
+  // 지속 타이핑 시 전송량을 캡한다 (예: 100KB×50명이 150ms마다 나가면 터널이 감당 불가).
+  // 키 입력마다 전체 텍스트를 읽지 않도록 '마지막 전송 길이' 기준으로 판정한다.
+  const textThrottleInterval = () =>
+    lastTextSentLength > 200_000 ? 1500
+      : lastTextSentLength > 50_000 ? 500
+      : TEXT_THROTTLE_MS;
+
   const textWatcher = vscode.workspace.onDidChangeTextDocument((event) => {
     if (!currentTextDocument) return;
     if (event.document.uri.toString() !== currentTextDocument.uri.toString()) return;
 
-    // debounce
-    if (textDebounceTimer) clearTimeout(textDebounceTimer);
-    textDebounceTimer = setTimeout(() => {
-      textDebounceTimer = null;
-      runSafely('document:update debounce', () => {
-        let content = event.document.getText();
-        // Only resolve images for markdown/html documents (cache-only for real-time typing)
-        if (isImageRelevantTextDocument()) {
-          content = resolveTextImagesRealtime(content, getBaseDir());
-        }
-        broadcast('document:update', { content });
-      });
-    }, TEXT_DEBOUNCE_MS);
+    // leading+trailing 스로틀 — 연타 중에도 간격마다 중간 상태가 전송돼
+    // 학생 화면 글자가 실시간으로 따라온다 (과거 trailing 디바운스는 키를 떼야만 반영).
+    const interval = textThrottleInterval();
+    const now = Date.now();
+    const since = now - lastTextUpdateTime;
+    if (since < interval) {
+      if (textTrailingTimer) clearTimeout(textTrailingTimer);
+      textTrailingTimer = setTimeout(() => {
+        textTrailingTimer = null;
+        runSafely('document:update trailing', sendDocumentUpdate);
+      }, interval - since);
+    } else {
+      runSafely('document:update leading', sendDocumentUpdate);
+    }
   });
 
   (textWatcher as any).__textDocWatcher = true;
@@ -1094,12 +1143,13 @@ export function stopWatching() {
   }
   disposables = [];
 
-  // Flush: send final cell state for every pending debounce before stopping
+  // Flush: send final cell state for every pending trailing timer before stopping
   // (prevent last-keystroke loss).
-  for (const idx of [...debounceTimers.keys()]) {
+  for (const idx of [...cellUpdateTrailingTimers.keys()]) {
     flushCellUpdate(idx);
   }
-  debounceTimers.clear();
+  cellUpdateTrailingTimers.clear();
+  lastCellUpdateTimes.clear();
   // cell:output 스로틀 trailing 타이머 정리 (세션 종료 후 발화 방지).
   for (const timer of outputTrailingTimers.values()) {
     clearTimeout(timer);
@@ -1118,10 +1168,12 @@ export function stopWatching() {
     viewportTrailingTimer = null;
   }
 
-  if (textDebounceTimer) {
-    clearTimeout(textDebounceTimer);
-    textDebounceTimer = null;
+  if (textTrailingTimer) {
+    clearTimeout(textTrailingTimer);
+    textTrailingTimer = null;
   }
+  lastTextUpdateTime = 0;
+  lastTextSentLength = 0;
 
   if (syncBackupTimer) {
     clearTimeout(syncBackupTimer);
