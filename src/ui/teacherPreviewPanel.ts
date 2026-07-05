@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { getConfig } from '../utils/config';
 import { getTeacherToken } from '../server/wsServer';
 import { Logger } from '../utils/logger';
+import { openDownloadUrl } from './viewerPanel';
 
 export class TeacherPreviewPanel {
   public static currentPanel: TeacherPreviewPanel | undefined;
@@ -21,7 +22,7 @@ export class TeacherPreviewPanel {
     // 웹뷰(Teacher Preview)가 현재 세션 토큰을 물어오면 라이브 값으로 응답한다.
     // 이 핸들러는 '전역' 세션 상태(getTeacherToken)를 읽으므로, 이 패널이 reload로
     // 재생성되지 못한 상태(고아)여도 세션이 뜨는 즉시 웹뷰가 스스로 연결된다(자기 치유).
-    this.panel.webview.onDidReceiveMessage((msg: { type?: string }) => {
+    this.panel.webview.onDidReceiveMessage((msg: { type?: string; url?: string }) => {
       if (msg && msg.type === 'requestTeacherToken') {
         const token = getTeacherToken();
         this.panel.webview.postMessage({
@@ -30,6 +31,9 @@ export class TeacherPreviewPanel {
           wsUrl: `ws://localhost:${getConfig().port}`,
           hasSession: !!token,
         });
+      } else if (msg && msg.type === 'download') {
+        // Webview에서는 상대경로 다운로드가 불가 — 기본 브라우저로 절대 URL을 연다
+        openDownloadUrl(msg.url);
       }
     }, null, this.disposables);
 

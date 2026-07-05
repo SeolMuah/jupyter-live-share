@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { startSession, stopSession, createPoll, endPollCommand } from './ui/commands';
+import { startSession, stopSession, createPoll, endPollCommand, setViewerChatPanel } from './ui/commands';
 import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
 import { ViewerChatPanelProvider } from './ui/viewerChatPanel';
@@ -52,8 +52,9 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Wire ViewerChatPanel to ViewerPanel
+  // Wire ViewerChatPanel to ViewerPanel (학생 모드) & commands (교사 모드)
   ViewerPanel.setChatPanel(viewerChatPanelProvider);
+  setViewerChatPanel(viewerChatPanelProvider);
 
   // Handle messages from sidebar webview
   sessionViewProvider.setOnCommand((command, data) => {

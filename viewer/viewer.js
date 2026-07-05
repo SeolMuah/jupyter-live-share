@@ -1275,6 +1275,15 @@
   // === Download ===
 
   function downloadNotebook() {
+    if (isVSCodeWebview) {
+      // VS Code webview: origin이 vscode-webview://라 상대경로 '/download'가 공유 서버로
+      // 가지 않고 window.open도 차단됨 → 확장에 위임해 기본 브라우저로 절대 URL을 연다.
+      const wsUrl = window.__WS_URL__ || '';
+      const base = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/+$/, '');
+      if (!base || !vscodeApi) return;
+      vscodeApi.postMessage({ type: 'download', url: base + '/download' });
+      return;
+    }
     window.open('/download', '_blank');
   }
 

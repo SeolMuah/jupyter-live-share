@@ -40,7 +40,7 @@ export class ViewerPanel {
     }, 300);
   }
 
-  private handleWebviewMessage(msg: { type: string; wsUrl?: string; nickname?: string; pin?: string }): void {
+  private handleWebviewMessage(msg: { type: string; wsUrl?: string; nickname?: string; pin?: string; url?: string }): void {
     switch (msg.type) {
       case 'authenticated':
         // Viewer successfully authenticated — connect chat panel
@@ -53,6 +53,10 @@ export class ViewerPanel {
         if (ViewerPanel.chatPanel && msg.nickname) {
           ViewerPanel.chatPanel.setName(msg.nickname);
         }
+        break;
+      case 'download':
+        // Webview에서는 상대경로 다운로드가 불가 — 기본 브라우저로 절대 URL을 연다
+        openDownloadUrl(msg.url);
         break;
     }
   }
@@ -289,4 +293,14 @@ export class ViewerPanel {
 
 function getNonce(): string {
   return crypto.randomBytes(16).toString('hex');
+}
+
+/** webview가 요청한 다운로드 URL을 검증 후 기본 브라우저로 연다 (http/https만 허용) */
+export function openDownloadUrl(url: unknown): void {
+  if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return;
+  try {
+    vscode.env.openExternal(vscode.Uri.parse(url));
+  } catch (err) {
+    Logger.error('Failed to open download URL', err);
+  }
 }

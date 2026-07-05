@@ -3,8 +3,8 @@ import * as crypto from 'crypto';
 
 /**
  * VS Code 하단 패널 (터미널 영역)에 표시되는 Viewer Chat WebviewView.
- * 학생이 Open Viewer로 세션에 참여할 때 채팅/투표를 전용 패널에서 처리한다.
- * chatOnly 연결로 접속자 수에 포함되지 않음.
+ * - 학생: Open Viewer로 세션에 참여할 때 채팅/투표를 전용 패널에서 처리 (chatOnly 연결, 접속자 수 미포함)
+ * - 교사: 세션 시작 시 자동으로 teacherPanel 연결 — 학생과 동일한 UI로 채팅 (접속자 수 미포함)
  */
 export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'codeClassLive.viewerChatPanel';
@@ -13,6 +13,8 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
   private _wsUrl: string | null = null;
   private _pin: string | null = null;
   private _nickname: string | null = null;
+  private _teacherToken: string | null = null;
+  private _mode: 'student' | 'teacher' | null = null;
   private _isConnected = false;
   private _unreadCount = 0;
 
@@ -51,6 +53,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
             wsUrl: this._wsUrl,
             pin: this._pin,
             nickname: this._nickname,
+            teacherToken: this._teacherToken,
           });
         }
       } else if (msg.type === 'newMessage') {
@@ -68,30 +71,74 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this._getHtml(webviewView.webview);
   }
 
-  /** ViewerPanel 인증 성공 시 호출 — WebSocket 연결 지시 */
+  /** ViewerPanel 인증 성공 시 호출 — WebSocket 연결 지시 (학생 모드) */
   connect(wsUrl: string, pin?: string): void {
+    // 교사 세션 채팅이 활성인 동안 학생 연결이 이를 덮어쓰지 않게 한다
+    if (this._mode === 'teacher') return;
+    this._mode = 'student';
     this._wsUrl = wsUrl;
     this._pin = pin || null;
+    this._teacherToken = null;
     this._isConnected = true;
     this._view?.webview.postMessage({
       type: 'connect',
       wsUrl,
       pin: this._pin,
       nickname: this._nickname,
+      teacherToken: null,
     });
+  }
+
+  /** 세션 시작 시 호출 — 교사 모드로 WebSocket 연결 지시 (학생과 동일 UI로 채팅) */
+  connectAsTeacher(wsUrl: string, teacherToken: string): void {
+    this._mode = 'teacher';
+    this._wsUrl = wsUrl;
+    this._pin = null;
+    this._teacherToken = teacherToken;
+    this._isConnected = true;
+    if (this._view) {
+      // 이미 열려 있으면 포커스를 뺏지 않고 보이기만 한다
+      this._view.webview.postMessage({
+        type: 'connect',
+        wsUrl,
+        pin: null,
+        nickname: this._nickname,
+        teacherToken,
+      });
+      this._view.show?.(true);
+    } else {
+      // 아직 resolve 전이면 focus로 열어 webview의 ready → connect 경로를 태운다
+      vscode.commands.executeCommand('codeClassLive.viewerChatPanel.focus').then(undefined, () => { /* 무시 */ });
+    }
   }
 
   /** 학생 이름 설정 시 호출 */
   setName(nickname: string): void {
+    // 교사 모드에서는 서버가 teacherName을 사용 — 학생 닉네임으로 덮어쓰지 않는다
+    if (this._mode === 'teacher') return;
     this._nickname = nickname;
     this._view?.webview.postMessage({ type: 'setName', nickname });
   }
 
-  /** ViewerPanel 닫힐 때 호출 — WebSocket 해제 */
+  /** ViewerPanel 닫힐 때 호출 — WebSocket 해제 (학생 모드에서만 동작) */
   disconnect(): void {
+    // 교사 세션 채팅은 ViewerPanel 생명주기와 무관 — 세션 종료(disconnectTeacher)로만 해제
+    if (this._mode === 'teacher') return;
+    this._doDisconnect();
+  }
+
+  /** 세션 종료 시 호출 — 교사 모드 연결 해제 */
+  disconnectTeacher(): void {
+    if (this._mode !== 'teacher') return;
+    this._doDisconnect();
+  }
+
+  private _doDisconnect(): void {
+    this._mode = null;
     this._wsUrl = null;
     this._pin = null;
     this._nickname = null;
+    this._teacherToken = null;
     this._isConnected = false;
     this._unreadCount = 0;
     this._updateBadge();
@@ -393,7 +440,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
   <!-- 비연결 상태 -->
   <div class="placeholder" id="placeholder">
     <span class="placeholder-icon">💬</span>
-    <span>Open Viewer to chat</span>
+    <span>Start a session or open Viewer to chat</span>
   </div>
 
   <!-- 채팅 영역 -->
@@ -420,21 +467,40 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
       let ws = null;
       let connected = false;
       let nickname = null;
+      let isTeacherMode = false;
       const MAX_MESSAGES = 300;
+
+      // 자동 재접속: 일시적 네트워크 단절로 교사/학생 채팅이 세션 내내 끊긴 채
+      // 남지 않도록, 비정상 close에 한해 제한 횟수만큼 재시도한다.
+      let lastConn = null; // { wsUrl, pin, teacherToken }
+      let reconnectTimer = null;
+      let reconnectAttempts = 0;
+      const MAX_RECONNECT = 10;
+      const RECONNECT_DELAY_MS = 2000;
+      // 재접속 제외 코드: 정상 종료(1000), PIN 오류(4001), 정원 초과(4002),
+      // 토큰 무효(4003), join 타임아웃(4008) — 재시도해도 같은 결과
+      const NO_RECONNECT_CODES = [1000, 4001, 4002, 4003, 4008];
 
       // 준비 완료 알림
       vscodeApi.postMessage({ type: 'ready' });
 
       // === WebSocket 관리 ===
 
-      function connectWs(wsUrl, pin, nick) {
+      function connectWs(wsUrl, pin, nick, teacherToken) {
         disconnectWs();
+        isTeacherMode = !!teacherToken;
         nickname = nick || nickname;
+        lastConn = { wsUrl: wsUrl, pin: pin || null, teacherToken: teacherToken || null };
         try {
           ws = new WebSocket(wsUrl);
 
           ws.onopen = () => {
-            ws.send(JSON.stringify({ type: 'join', data: { chatOnly: true, pin: pin || undefined } }));
+            if (isTeacherMode) {
+              // 교사 모드: 서버가 teacherName으로 닉네임을 자동 설정하고 접속자 수에 미집계
+              ws.send(JSON.stringify({ type: 'join', data: { teacherPanel: true, teacherToken: teacherToken } }));
+            } else {
+              ws.send(JSON.stringify({ type: 'join', data: { chatOnly: true, pin: pin || undefined } }));
+            }
             connected = true;
             showChat();
             addSystem('Chat connected');
@@ -447,17 +513,34 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
             } catch (e) { /* ignore */ }
           };
 
-          ws.onclose = () => {
+          ws.onclose = (event) => {
             connected = false;
             ws = null;
             addSystem('Chat disconnected');
+            maybeReconnect(event && event.code);
           };
 
           ws.onerror = () => { /* onclose handles cleanup */ };
         } catch (e) { /* ignore */ }
       }
 
+      function maybeReconnect(code) {
+        if (!lastConn) return;
+        if (NO_RECONNECT_CODES.indexOf(code) !== -1) return;
+        if (reconnectAttempts >= MAX_RECONNECT) return;
+        reconnectAttempts++;
+        addSystem('Reconnecting... (' + reconnectAttempts + '/' + MAX_RECONNECT + ')');
+        reconnectTimer = setTimeout(() => {
+          if (!lastConn) return;
+          connectWs(lastConn.wsUrl, lastConn.pin, nickname, lastConn.teacherToken);
+        }, RECONNECT_DELAY_MS);
+      }
+
       function disconnectWs() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
         if (ws) {
           ws.onclose = null;
           ws.close();
@@ -484,7 +567,11 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
       function handleMessage(msg) {
         switch (msg.type) {
           case 'join:result':
-            if (msg.data.success && nickname) {
+            if (msg.data.success) {
+              reconnectAttempts = 0; // 성공 시 재접속 카운터 리셋
+            }
+            // 교사 모드는 서버가 닉네임(teacherName)을 이미 설정하므로 join:name 불필요
+            if (msg.data.success && nickname && !isTeacherMode) {
               ws.send(JSON.stringify({ type: 'join:name', data: { nickname: nickname } }));
             }
             break;
@@ -507,6 +594,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
             break;
           case 'session:end':
             addSystem('Session ended');
+            lastConn = null; // 세션 종료 — 재접속하지 않는다
             disconnectWs();
             break;
         }
@@ -595,7 +683,10 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
           btn.textContent = (data.options && data.options[i]) ? data.options[i] : (i + 1).toString();
           btn.dataset.option = i;
           btn.addEventListener('click', () => votePoll(data.pollId, i));
-          if (hasVoted) {
+          // 교사는 자기 투표에 참여하지 않는다 (결과만 관찰)
+          if (isTeacherMode) {
+            btn.disabled = true;
+          } else if (hasVoted) {
             btn.disabled = true;
             if (parseInt(savedVote) === i) btn.classList.add('voted');
           }
@@ -618,6 +709,7 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       function votePoll(pollId, option) {
+        if (isTeacherMode) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         if (pollId !== currentPollId) return;
         const savedVote = localStorage.getItem('jls-poll-' + pollId);
@@ -729,13 +821,15 @@ export class ViewerChatPanelProvider implements vscode.WebviewViewProvider {
       window.addEventListener('message', (event) => {
         const msg = event.data;
         if (msg.type === 'connect' && msg.wsUrl) {
-          connectWs(msg.wsUrl, msg.pin, msg.nickname);
+          connectWs(msg.wsUrl, msg.pin, msg.nickname, msg.teacherToken);
         } else if (msg.type === 'setName' && msg.nickname) {
           nickname = msg.nickname;
-          if (ws && ws.readyState === WebSocket.OPEN) {
+          if (!isTeacherMode && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'join:name', data: { nickname: msg.nickname } }));
           }
         } else if (msg.type === 'disconnect') {
+          lastConn = null;
+          isTeacherMode = false;
           disconnectWs();
           hideChat();
         }

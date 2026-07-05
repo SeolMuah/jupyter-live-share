@@ -7,11 +7,18 @@ import { startWatching, stopWatching, setImageShareEnabled } from '../notebook/w
 import { StatusBarManager } from './statusBar';
 import { SessionViewProvider } from './sidebarView';
 import { TeacherPreviewPanel } from './teacherPreviewPanel';
+import { ViewerChatPanelProvider } from './viewerChatPanel';
 import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
 
 let tunnel: TunnelManager | null = null;
 let isRunning = false;
+// 하단 Viewer Chat 패널 — 세션 시작 시 교사 모드로 자동 연결하기 위한 참조 (extension.ts에서 주입)
+let viewerChatPanel: ViewerChatPanelProvider | undefined;
+
+export function setViewerChatPanel(provider: ViewerChatPanelProvider): void {
+  viewerChatPanel = provider;
+}
 // 동의 모달·서버 기동 중 재진입 차단 래치 — isRunning은 서버 기동 후에야 true가 되므로,
 // 모달이 떠 있는 동안 Start를 또 누르면 두 세션이 동시에 기동을 시도한다(EADDRINUSE 유발).
 let isStarting = false;
@@ -129,6 +136,10 @@ export async function startSession(
         // 터널 기동(수 초)을 기다리지 않는다 — 프리뷰는 ws://localhost로 붙으므로
         // 여기서 바로 재생성해야 구 패널이 stale 토큰으로 남는 창이 사라진다.
         TeacherPreviewPanel.reload(context);
+
+        // 하단 Viewer Chat 패널을 교사 모드로 연결 — 강사도 학생과 동일 UI로 채팅.
+        // (패널 표시/포커스 처리는 connectAsTeacher 내부에서 resolve 여부에 따라 수행)
+        viewerChatPanel?.connectAsTeacher(`ws://localhost:${config.port}`, teacherToken);
 
         // 4. 터널 시작 (설정에 따라)
         let tunnelUrl = `http://localhost:${config.port}`;
@@ -310,6 +321,9 @@ async function cleanupSession(
   sidebarView?: SessionViewProvider,
 ) {
   isRunning = false;
+
+  // 교사 모드 채팅 패널 해제 (학생 모드 연결은 건드리지 않음)
+  viewerChatPanel?.disconnectTeacher();
 
   stopWatching();
 
