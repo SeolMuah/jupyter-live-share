@@ -129,7 +129,7 @@ PRD의 API 설계 섹션 참조. 핵심 이벤트:
 #### 빌드 → VSIX 패키지 생성
 ```bash
 npm run compile                # webpack 빌드
-npx vsce package               # .vsix 파일 생성 (루트에 jupyter-live-share-x.x.x.vsix)
+npx vsce package               # .vsix 파일 생성 (루트에 code-class-live-sharing-x.x.x.vsix)
 ```
 
 #### 버전 올리기
@@ -224,6 +224,8 @@ curl -s -X PATCH \
 #### 토큰 파일 (`token.txt`, gitignore 대상)
 - 1번째 줄: Open VSX 토큰
 - 2번째 줄: GitHub Personal Access Token (repo scope 필요)
+- 6번째 줄: Azure DevOps PAT (구버전, 폐기됨 — 사용 금지)
+- 10번째 줄: Azure DevOps PAT (신규) — **VS Code Marketplace 배포용**. `npx vsce publish`는 저장된 자격증명이 없으므로 반드시 `VSCE_PAT=$(sed -n '10p' token.txt) npx vsce publish --packagePath <파일>.vsix` 형태로 실행
 
 ### 주의사항
 
