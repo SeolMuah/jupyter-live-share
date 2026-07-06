@@ -1515,6 +1515,11 @@ const Renderer = (() => {
     // Without this, inline <code> (e.g. .txt, .md raw) uses text-width containing block
     // instead of full parent width, causing narrow/misaligned selection overlays
     codeEl.style.display = 'block';
+    // 가로 스크롤되는 긴 줄에서도 라인 하이라이트(left:0;right:0)와 선택 배경(100% 기반)이
+    // 글자 끝까지 이어지도록, codeEl 박스를 넘친 콘텐츠 전체 폭으로 확장한다.
+    // (block 기본 폭은 pre의 '보이는 폭'까지라 그 밖의 글자엔 배경이 안 칠해졌음)
+    codeEl.style.width = 'max-content';
+    codeEl.style.minWidth = '100%';
 
     // ★ Range API로 정확한 커서 위치 계산 (Canvas measureText fallback)
     // Canvas measureText는 font hinting/sub-pixel 차이로 한 칸 어긋날 수 있음
