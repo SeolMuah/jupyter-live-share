@@ -196,6 +196,7 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.6;
+  padding-top: var(--header-height); /* fixed 헤더가 흐름에서 빠진 만큼 보정 */
 }
 
 /* === PIN Screen === */
@@ -289,6 +290,9 @@ body {
 }
 
 /* === Header === */
+/* fixed(footer와 동일): 문서가 가로 스크롤될 때도 헤더가 뷰포트 전체 폭을 유지.
+   (sticky는 body 폭=뷰포트 폭까지만 그려져 오른쪽 스크롤 시 검은 바가 끊겼음)
+   흐름에서 빠진 40px는 body padding-top으로 보정 → 콘텐츠 지오메트리는 기존과 동일. */
 header {
   display: flex;
   justify-content: space-between;
@@ -296,8 +300,10 @@ header {
   padding: 8px 16px;
   background: var(--header-bg);
   color: var(--header-text);
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 200;
   height: var(--header-height);
   box-sizing: border-box;
