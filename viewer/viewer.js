@@ -586,6 +586,7 @@
           if (documentType === 'plaintext') {
             Renderer.showDocumentCursor(msg.data);
             lastCursorScrollTime = Date.now();
+            updateHScrollProxy(); // md rendered→raw 전환 직후 문서 전체 pre가 생기므로 프록시 갱신
           }
         } else {
           if (documentType === 'notebook') {
@@ -782,7 +783,7 @@
     // 프록시 스크롤 → 코드 pre로 반영
     hScrollProxy.addEventListener('scroll', () => {
       if (hScrollSyncing) return;
-      const pre = document.querySelector('#document-content pre');
+      const pre = document.querySelector('#document-content > pre');
       if (!pre) return;
       hScrollSyncing = true;
       pre.scrollLeft = hScrollProxy.scrollLeft;
@@ -795,10 +796,11 @@
 
   function updateHScrollProxy() {
     const proxy = ensureHScrollProxy();
-    // 마크다운 문서는 문서 전체 pre가 없고 코드블록만 개별 pre → 프록시 미적용(코드블록 자체 스크롤바 사용)
-    const isMarkdownDoc = currentDocument && currentDocument.languageId === 'markdown';
-    const pre = (documentType === 'plaintext' && !isMarkdownDoc)
-      ? document.querySelector('#document-content pre')
+    // 문서 전체 소스를 담는 '직계' <pre>만 프록시 대상: 코드/텍스트 문서 + md 문서의 raw 뷰.
+    // (md raw 뷰의 pre도 자체 스크롤바가 CSS로 숨겨져 있어, 프록시가 없으면 가로 스크롤 수단이 없다)
+    // 렌더된 md 뷰의 코드블록 pre는 .cell-markup 하위라 직계 선택자에 안 걸림 → 자체 스크롤바 유지.
+    const pre = (documentType === 'plaintext')
+      ? document.querySelector('#document-content > pre')
       : null;
     // plaintext가 아니거나 가로 넘침이 없으면 숨김
     if (!pre || pre.scrollWidth <= pre.clientWidth + 1) {
@@ -897,6 +899,7 @@
     // auto-scroll 체크보다 앞에 둬서 설정과 무관하게 모든 학생의 view 모드를 일관되게 유지.
     if (data.type === 'plaintext' && documentType === 'plaintext') {
       Renderer.maybeRevertDocRawOnTeacherScroll();
+      updateHScrollProxy(); // raw→rendered 복귀 시 문서 전체 pre가 사라지므로 프록시 표시/숨김 갱신
     }
 
     // Auto-scroll 체크

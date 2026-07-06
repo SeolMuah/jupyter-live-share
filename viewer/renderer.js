@@ -1635,16 +1635,46 @@ const Renderer = (() => {
     const rect = targetEl.getBoundingClientRect();
     const margin = 60;
 
-    // 커서가 화면 안에 보이면 스크롤 불필요
-    if (rect.top >= headerHeight + margin && rect.bottom <= window.innerHeight - margin) {
-      return;
+    // 세로: 커서가 화면 밖일 때만 스크롤
+    if (!(rect.top >= headerHeight + margin && rect.bottom <= window.innerHeight - margin)) {
+      const absoluteTop = rect.top + window.scrollY;
+      window.scrollTo({
+        top: Math.max(0, absoluteTop - headerHeight - (window.innerHeight / 3)),
+        behavior: 'auto'
+      });
     }
 
-    const absoluteTop = rect.top + window.scrollY;
-    window.scrollTo({
-      top: Math.max(0, absoluteTop - headerHeight - (window.innerHeight / 3)),
-      behavior: 'auto'
-    });
+    scrollCursorIntoViewX();
+  }
+
+  /**
+   * 가로 추종: 문서 전체 <pre>(코드/텍스트/md raw)에서 커서가 긴 줄의 보이지 않는
+   * 위치에 있으면 pre 내부 scrollLeft(+ 좁은 창에서는 창 가로 스크롤)를 조정해
+   * 커서 주변 글자가 보이게 한다. 세로와 같은 원칙: 이미 보이면 아무것도 안 함.
+   * 노트북 셀 커서는 대상 아님(셀별 가로 스크롤바 유지) — pre.contains 가드로 제외.
+   */
+  function scrollCursorIntoViewX() {
+    if (!cursorElement) return;
+    const pre = document.querySelector('#document-content > pre');
+    if (!pre || !pre.contains(cursorElement)) return;
+    const hMargin = 40;
+
+    // 1) pre 내부: 커서가 pre 가시 폭 밖이면 scrollLeft 조정 (커서를 가시 폭 60% 지점으로)
+    const preRect = pre.getBoundingClientRect();
+    let cRect = cursorElement.getBoundingClientRect();
+    if (cRect.left < preRect.left + hMargin || cRect.right > preRect.right - hMargin) {
+      pre.scrollLeft = Math.max(0, pre.scrollLeft + (cRect.left - preRect.left) - pre.clientWidth * 0.6);
+      cRect = cursorElement.getBoundingClientRect();
+    }
+
+    // 2) 창 가로(좁은 창에서 960px 컨테이너 자체가 넘칠 때): 커서가 뷰포트 밖이면 창을 이동
+    if (cRect.left < hMargin || cRect.right > window.innerWidth - hMargin) {
+      window.scrollTo({
+        left: Math.max(0, window.scrollX + cRect.left - window.innerWidth * 0.5),
+        top: window.scrollY,
+        behavior: 'auto'
+      });
+    }
   }
 
   /**
