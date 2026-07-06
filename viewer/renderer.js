@@ -1947,6 +1947,7 @@ const Renderer = (() => {
     handleStructureChange,
     renderPlaintextDocument,
     renderImageDocument,
+    copyToClipboard,
     updateDocumentContent,
     showTeacherCursor,
     showDocumentCursor,

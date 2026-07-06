@@ -2079,3 +2079,8 @@ footer label {
   color: var(--text-secondary);
   text-align: center;
 }
+
+/* 하단 툴바 전체 복사 버튼 (VS Code webview 전용) — 첫 자식 + auto 마진으로 왼쪽 고정 */
+#btn-copy {
+  margin-right: auto;
+}

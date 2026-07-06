@@ -104,6 +104,9 @@
   const toolbar = document.getElementById('toolbar');
   const themeToggle = document.getElementById('theme-toggle');
   const btnDownload = document.getElementById('btn-download');
+  // 하단 툴바 전체 복사 버튼 — VS Code webview 템플릿에만 존재 (웹은 헤더 Copy 사용).
+  // 웹뷰는 폭이 좁아 헤더 오른쪽 끝 Copy까지 가로 스크롤이 필요했던 불편 해소.
+  const btnCopy = document.getElementById('btn-copy');
 
   // Layout
   const appLayout = document.getElementById('app-layout');
@@ -189,6 +192,10 @@
     // Event listeners
     themeToggle.addEventListener('click', toggleTheme);
     btnDownload?.addEventListener('click', downloadNotebook);
+    btnCopy?.addEventListener('click', () => {
+      const src = document.querySelector('.plaintext-document')?.dataset?.source;
+      if (src) Renderer.copyToClipboard(src, btnCopy);
+    });
 
     pinSubmit?.addEventListener('click', submitPin);
     pinInput?.addEventListener('keydown', (e) => {
@@ -700,6 +707,7 @@
     fileName.textContent = nbPath;
     fileName.title = nbPath;
     setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트 (트리 미수신 시 경로만 기억)
+    updateCopyButton();
     Renderer.renderNotebook(data, notebookContainer);
     updateHScrollProxy(); // 노트북 모드에서는 프록시 숨김
 
@@ -733,6 +741,11 @@
     }
   }
 
+  // 하단 Copy 버튼은 전체 소스 복사가 의미 있는 plaintext 문서에서만 노출
+  function updateCopyButton() {
+    if (btnCopy) btnCopy.style.display = documentType === 'plaintext' ? '' : 'none';
+  }
+
   function handleDocumentFull(data) {
     documentType = 'plaintext';
     currentDocument = data;
@@ -742,6 +755,7 @@
     fileName.textContent = docPath;
     fileName.title = docPath;
     setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트 (트리 미수신 시 경로만 기억)
+    updateCopyButton();
     Renderer.renderPlaintextDocument(data, notebookContainer);
     updateHScrollProxy();
 
@@ -822,6 +836,7 @@
     Renderer.renderImageDocument(data, notebookContainer);
     updateHScrollProxy();
     setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트
+    updateCopyButton();
 
     if (btnDownload) {
       btnDownload.textContent = 'Download';

@@ -271,6 +271,7 @@ export class ViewerPanel {
 
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
+    <button id="btn-copy" style="display:none;" title="Copy entire code">Copy</button>
     <button id="btn-files" style="display:none;" title="Toggle file explorer">Explorer</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
