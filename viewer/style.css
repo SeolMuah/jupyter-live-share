@@ -2038,3 +2038,44 @@ footer label {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+
+/* === 단일 이미지 공유 (image:full) === */
+.image-document-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  overflow-x: auto; /* 실제 크기 모드에서 가로 스크롤 허용 */
+}
+
+.shared-image {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  /* 투명 PNG 식별용 체커보드 배경 */
+  background:
+    linear-gradient(45deg, rgba(128,128,128,0.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,0.12) 75%),
+    linear-gradient(45deg, rgba(128,128,128,0.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,0.12) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.shared-image.zoom-actual {
+  max-width: none;
+  cursor: zoom-out;
+  align-self: flex-start;
+}
+
+.image-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.image-share-error {
+  padding: 32px 16px;
+  color: var(--text-secondary);
+  text-align: center;
+}

@@ -5,6 +5,7 @@ import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocume
 import { Logger } from '../utils/logger';
 import { getConfig } from '../utils/config';
 import { startExplorerWatch, stopExplorerWatch, getExplorerTree } from './explorerTree';
+import { buildImagePayload, IMAGE_EXTS, ImageFullPayload } from './imageShare';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot, setOnImagesOptimized } from '../utils/imageResolver';
 import WebSocket from 'ws';
 
@@ -50,7 +51,11 @@ let lastActiveCellIndex = -1;
 const lastSentSources: Map<number, string> = new Map(); // 셀별 마지막 전송 소스 (중복 전송 방지)
 let currentNotebook: vscode.NotebookDocument | null = null;
 let currentTextDocument: vscode.TextDocument | null = null;
-let watchMode: 'notebook' | 'plaintext' | null = null;
+let watchMode: 'notebook' | 'plaintext' | 'image' | null = null;
+// 단일 이미지 공유 모드 상태 — 이미지 탭(jpg/png 등) 활성화 시 image:full로 학생에게 공유
+let currentImageUri: vscode.Uri | null = null;
+let cachedImageFull: ImageFullPayload | null = null;
+let imageTabListeners: vscode.Disposable[] = []; // 모드 전환(disposables 초기화)에도 살아남는 전역 탭 감시
 let imageShareEnabled = true;
 
 // Cache of the fully serialized + image-resolved notebook payload, reused for every
@@ -395,6 +400,100 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
 }
 
 /**
+ * 활성 탭이 이미지 파일이면 그 Uri를 반환 (이미지 뷰어는 TextEditor가 아니라 커스텀 탭이라
+ * onDidChangeActiveTextEditor로는 감지 불가 — tabGroups API로 판별).
+ */
+function getActiveImageUri(): vscode.Uri | null {
+  try {
+    const tab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+    const input = tab?.input as { uri?: vscode.Uri } | undefined;
+    const uri = input?.uri;
+    if (!uri || uri.scheme !== 'file') return null;
+    const ext = path.extname(uri.fsPath).toLowerCase();
+    return IMAGE_EXTS.has(ext) ? uri : null;
+  } catch {
+    return null; // tabGroups 미지원 구버전 등 — 이미지 공유만 비활성, 세션은 무해
+  }
+}
+
+/**
+ * Switch to single image mode: 이미지 탭 활성화 시 최적화된 이미지를 image:full로 공유.
+ * 다른 스위치들과 동일하게 full cleanup 후 복귀용 에디터 리스너만 재등록한다.
+ */
+function switchToImage(uri: vscode.Uri) {
+  flushAndResetState();
+  for (const d of disposables) { d.dispose(); }
+  disposables = [];
+  currentNotebook = null;
+  currentTextDocument = null;
+  currentImageUri = uri;
+  cachedImageFull = null;
+  watchMode = 'image';
+
+  // 이미지 → 텍스트/노트북 복귀 감지
+  disposables.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (!editor) return;
+      if (editor.document.uri.scheme === 'vscode-notebook-cell') return;
+      if (editor.document.uri.scheme !== 'file') return;
+      switchToTextDocument(editor.document);
+    })
+  );
+  disposables.push(
+    vscode.window.onDidChangeActiveNotebookEditor((editor) => {
+      if (!editor || editor.notebook.notebookType !== 'jupyter-notebook') return;
+      switchToNotebook(editor.notebook);
+    })
+  );
+
+  // 파일 전환 시 판서 및 스크롤 위치 초기화 (기존 switch들과 동일)
+  clearDrawStrokes();
+  broadcast('draw:clear', {});
+  clearLastScrollSync();
+
+  void broadcastImageFull(uri);
+  Logger.info(`Switched to image: ${uri.path}`);
+}
+
+async function broadcastImageFull(uri: vscode.Uri): Promise<void> {
+  try {
+    const payload = await buildImagePayload(uri);
+    // 인코딩 중 다른 파일로 전환됐으면 stale 페이로드를 보내지 않는다
+    if (watchMode !== 'image' || !currentImageUri || currentImageUri.toString() !== uri.toString()) return;
+    cachedImageFull = payload;
+    broadcast('image:full', payload);
+  } catch (err) {
+    // 이미지 공유는 부가 기능 — 실패가 세션을 위협하지 않게 로그만 남긴다
+    Logger.warn(`[imageShare] broadcast failed: ${String(err)}`);
+  }
+}
+
+/**
+ * 전역 이미지 탭 감시 등록 — 모드 전환 시 disposables가 통째로 정리되므로
+ * 별도 배열(imageTabListeners)로 관리해 세션 내내 유지한다. startWatching에서 1회 등록.
+ */
+function startImageTabWatch(): void {
+  stopImageTabWatch();
+  const check = () => {
+    try {
+      const uri = getActiveImageUri();
+      if (!uri) return;
+      if (watchMode === 'image' && currentImageUri && currentImageUri.toString() === uri.toString()) return;
+      switchToImage(uri);
+    } catch (err) {
+      Logger.warn(`[imageShare] tab check failed: ${String(err)}`);
+    }
+  };
+  imageTabListeners.push(vscode.window.tabGroups.onDidChangeTabs(check));
+  imageTabListeners.push(vscode.window.tabGroups.onDidChangeTabGroups(check));
+}
+
+function stopImageTabWatch(): void {
+  for (const d of imageTabListeners) { try { d.dispose(); } catch { /* 무시 */ } }
+  imageTabListeners = [];
+}
+
+/**
  * Switch to text document mode: full cleanup → re-register ALL handlers → broadcast.
  */
 function switchToTextDocument(document: vscode.TextDocument) {
@@ -425,7 +524,7 @@ function switchToTextDocument(document: vscode.TextDocument) {
   Logger.info(`Switched to text document: ${document.uri.path}`);
 }
 
-export function getWatchMode(): 'notebook' | 'plaintext' | null {
+export function getWatchMode(): 'notebook' | 'plaintext' | 'image' | null {
   return watchMode;
 }
 
@@ -435,6 +534,9 @@ export function getCurrentFileUri(): import('vscode').Uri | null {
   }
   if (watchMode === 'plaintext' && currentTextDocument) {
     return currentTextDocument.uri;
+  }
+  if (watchMode === 'image' && currentImageUri) {
+    return currentImageUri;
   }
   return null;
 }
@@ -520,6 +622,12 @@ function setupNewViewerHandler() {
       sendTo(ws, 'scroll:sync', scrollState);
     }
 
+    // 이미지 모드: 캐시된 image:full을 새 접속자에게 전송
+    // (캐시가 아직 없으면 = 인코딩 중이면, 완료 시 broadcast가 전 클라이언트를 커버)
+    if (watchMode === 'image' && cachedImageFull) {
+      sendTo(ws, 'image:full', cachedImageFull);
+    }
+
     // 탐색기 트리 공유가 켜져 있고 캐시가 준비됐으면 새 접속자에게 전송
     // (재빌드 없이 캐시 재사용 — 뷰어는 이 이벤트를 못 받으면 트리 UI를 노출하지 않음)
     if (getConfig().shareExplorer) {
@@ -545,6 +653,17 @@ export function startWatching() {
   // 탐색기 트리 공유 — 게이트는 explorerTree 내부에서 전송 시점마다 재확인한다
   // (설정이 꺼져 있으면 어떤 경로로도 전송 없음, 수업 중 켜고 끄기도 즉시 반영).
   startExplorerWatch();
+
+  // 이미지 탭 전역 감시 — 모드와 무관하게 세션 내내 유지 (이미지 탭 활성화 → image 모드 진입)
+  startImageTabWatch();
+
+  // 0) 세션 시작 시점에 이미 이미지 탭이 활성인 경우 (아래 노트북/텍스트 검사보다 우선 —
+  //    이미지 탭이 활성이면 activeNotebook/activeTextEditor는 어차피 비어 있다)
+  const initialImage = getActiveImageUri();
+  if (initialImage) {
+    switchToImage(initialImage);
+    return;
+  }
 
   // 1) 포커스된 노트북 에디터 우선
   const activeNotebook = vscode.window.activeNotebookEditor;
@@ -1160,6 +1279,11 @@ export function stopWatching() {
 
   // 탐색기 트리 감시 정리 (설정과 무관하게 항상 호출 — idempotent라 안전)
   stopExplorerWatch();
+
+  // 이미지 탭 감시·상태 정리
+  stopImageTabWatch();
+  currentImageUri = null;
+  cachedImageFull = null;
 
   // Flush: send final cell state for every pending trailing timer before stopping
   // (prevent last-keystroke loss).

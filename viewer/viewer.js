@@ -554,6 +554,10 @@
         handleDocumentUpdate(msg.data);
         break;
 
+      case 'image:full':
+        handleImageFull(msg.data);
+        break;
+
       case 'focus:cell':
         if (documentType === 'notebook') {
           // focus:cell fires on deliberate cell click — all viewers (including teacher preview) should follow.
@@ -803,6 +807,25 @@
         proxy.scrollLeft = pre.scrollLeft;
         hScrollSyncing = false;
       }, { passive: true });
+    }
+  }
+
+  // 단일 이미지 공유 (강사가 jpg/png 등 이미지 탭을 활성화)
+  function handleImageFull(data) {
+    documentType = 'image';
+    currentDocument = null;
+    notebookCells = [];
+    currentPollId = currentPollId; // 투표 상태는 유지
+    const imgPath = data.filePath || data.fileName || 'image';
+    fileName.textContent = imgPath;
+    fileName.title = imgPath;
+    Renderer.renderImageDocument(data, notebookContainer);
+    updateHScrollProxy();
+    setActiveFile(data.filePath || null); // 파일 트리 활성 하이라이트
+
+    if (btnDownload) {
+      btnDownload.textContent = 'Download';
+      btnDownload.title = `Download ${data.fileName || 'image'} (원본)`;
     }
   }
 

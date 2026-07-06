@@ -2,6 +2,7 @@ import express from 'express';
 import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { execSync } from 'child_process';
 import { Logger } from '../utils/logger';
@@ -153,6 +154,28 @@ export function startHttpServer(
       if (!fileName) {
         res.status(404).json({ error: 'No file is currently being shared' });
         return;
+      }
+
+      // 이미지 모드: 학생 화면엔 최적화본이 보이지만 다운로드는 '원본 파일'을 제공
+      if (getWatchMode() === 'image') {
+        const uri = getCurrentFileUri();
+        if (uri) {
+          try {
+            const buf = fs.readFileSync(uri.fsPath);
+            const ext = path.extname(uri.fsPath).toLowerCase();
+            const mimeMap: Record<string, string> = {
+              '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+              '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+            };
+            res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+            res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+            res.send(buf);
+            return;
+          } catch {
+            res.status(404).json({ error: 'Image file not readable' });
+            return;
+          }
+        }
       }
 
       const current = getCurrentContent();

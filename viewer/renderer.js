@@ -1038,6 +1038,63 @@ const Renderer = (() => {
   // === Plaintext Document Rendering ===
 
   /**
+   * 단일 이미지 문서 렌더 (image:full) — 최적화된 이미지를 중앙 정렬로 표시.
+   * 이미지는 항상 <img src="data:...">로만 렌더한다 (SVG 포함 — 스크립트 실행 경로 없음).
+   * 클릭으로 '화면 맞춤 ↔ 실제 크기(가로 스크롤)' 토글.
+   */
+  function renderImageDocument(data, container) {
+    resetCursorState();
+    container.innerHTML = '';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'plaintext-document image-document';
+
+    const header = document.createElement('div');
+    header.className = 'document-header';
+    const badge = document.createElement('span');
+    badge.className = 'document-type-badge';
+    badge.textContent = 'IMAGE';
+    header.appendChild(badge);
+    wrapper.appendChild(header);
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'document-content image-document-content';
+    contentEl.id = 'document-content';
+
+    if (data.error || !data.data) {
+      const errEl = document.createElement('div');
+      errEl.className = 'image-share-error';
+      errEl.textContent = data.error || '이미지를 표시할 수 없습니다';
+      contentEl.appendChild(errEl);
+    } else {
+      const img = document.createElement('img');
+      img.className = 'shared-image';
+      img.alt = data.fileName || 'shared image';
+      img.src = data.data; // data URI — 확장이 생성, 외부 URL 아님
+      img.addEventListener('click', () => {
+        img.classList.toggle('zoom-actual');
+      });
+      contentEl.appendChild(img);
+
+      // 메타 정보: 해상도 · 원본 크기 (다운로드는 항상 원본)
+      const meta = document.createElement('div');
+      meta.className = 'image-meta';
+      const parts = [];
+      if (data.width && data.height) parts.push(`${data.width}×${data.height}`);
+      if (data.originalBytes) {
+        const kb = data.originalBytes / 1024;
+        parts.push(`원본 ${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : Math.round(kb) + 'KB'}`);
+      }
+      parts.push('클릭: 실제 크기 전환 · Download: 원본 파일');
+      meta.textContent = parts.join(' · ');
+      contentEl.appendChild(meta);
+    }
+
+    wrapper.appendChild(contentEl);
+    container.appendChild(wrapper);
+  }
+
+  /**
    * Render a plaintext document
    */
   function renderPlaintextDocument(data, container) {
@@ -1889,6 +1946,7 @@ const Renderer = (() => {
     setActiveCell,
     handleStructureChange,
     renderPlaintextDocument,
+    renderImageDocument,
     updateDocumentContent,
     showTeacherCursor,
     showDocumentCursor,
