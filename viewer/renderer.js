@@ -127,6 +127,51 @@ const Renderer = (() => {
         codeBlock ? codeBlock : (tildes.length === 1 ? '&#126;' : tildes));
   }
 
+  /**
+   * 리스트 들여쓰기 정규화 — 교실에서 흔한 '비표준 들여쓰기'가 lazy continuation으로
+   * 앞 문단/항목에 합쳐져 학생 화면에서 줄이 막 이어져 보이는 버그의 근본 수정.
+   * CommonMark는 하위 항목을 '부모 내용 시작 + 3칸'까지만 중첩으로 인정하므로:
+   *  - 레벨당 6칸 이상 점프한 들여쓰기
+   *  - NBSP(U+00A0)·전각공백(U+3000, 한글 자판 Shift+Space) 들여쓰기
+   * 는 marked가 리스트로 인식하지 못하고 부모 항목 텍스트에 이어 붙인다.
+   * 여기서는 '리스트 마커([-*+], 숫자.)로 시작하는 줄'만 대상으로, 이어지는 리스트
+   * 문맥의 원본 들여쓰기 폭을 레벨 스택으로 추적해 표준 4칸/레벨로 재매핑한다.
+   *  - 코드 펜스(```/~~~) 내부는 건드리지 않는다
+   *  - 리스트 문맥 밖(스택 비활성)에서 4칸+ 일반 공백 들여쓰기로 시작하는 마커 줄은
+   *    '의도된 들여쓰기 코드블록'(예: YAML 예시)일 수 있으므로 보존한다
+   *  - 줄 수는 변하지 않으므로 data-line 스크롤 동기화 매핑에 영향 없다
+   */
+  function normalizeMarkdownListIndent(src) {
+    const lines = (src || '').split('\n');
+    let inFence = false;
+    const stack = []; // 활성 리스트의 레벨별 '원본 들여쓰기 폭'
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; stack.length = 0; continue; }
+      if (inFence) continue;
+      const m = line.match(/^([ \t\u00A0\u3000]*)((?:[-*+]|\d{1,9}[.)])(?:[ \t\u00A0\u3000]+|$))/);
+      if (!m) {
+        // 리스트가 아닌 내용 줄 → 리스트 문맥 종료 (빈 줄은 문맥 유지 — loose list)
+        if (line.trim() !== '') stack.length = 0;
+        continue;
+      }
+      const indentStr = m[1];
+      // 들여쓰기 폭 계산 (탭=4, 전각공백=2, 그 외=1)
+      let w = 0;
+      for (const ch of indentStr) w += ch === '\t' ? 4 : (ch === '\u3000' ? 2 : 1);
+      const exotic = /[\u00A0\u3000]/.test(m[0]);
+      // 리스트 문맥 밖 + 일반 공백 4칸 이상 = 의도된 코드블록일 수 있음 → 보존
+      if (stack.length === 0 && w > 3 && !exotic) continue;
+      while (stack.length && w < stack[stack.length - 1]) stack.pop();
+      if (stack.length === 0 || w > stack[stack.length - 1]) stack.push(w);
+      const depth = stack.length - 1;
+      // 마커 뒤에 붙은 특수 공백도 일반 공백으로 (예: '-　항목')
+      const marker = m[2].replace(/[\u00A0\u3000]/g, ' ');
+      lines[i] = ' '.repeat(depth * 4) + marker + line.slice(m[0].length);
+    }
+    return lines.join('\n');
+  }
+
   // marked.js math extension: $...$ 및 $$...$$ 수식을 emphasis 토크나이저보다 먼저 인식
   // GFM이 underscore(_)를 em/strong으로 처리하기 전에 수식을 보호
   marked.use({
@@ -293,6 +338,7 @@ const Renderer = (() => {
    */
   function resetCursorState() {
     if (markupRevertTimer) { clearTimeout(markupRevertTimer); markupRevertTimer = null; }
+    if (docRevertTimer) { clearTimeout(docRevertTimer); docRevertTimer = null; }
     cursorElement = null;
     selectionElement = null;
     currentCursorCellIndex = -1;
@@ -354,7 +400,7 @@ const Renderer = (() => {
     content.className = 'cell-markup';
 
     // 라인 번호 매핑을 포함한 마크다운 렌더링 (정확한 스크롤 동기화용)
-    const source = cell.source || '';
+    const source = normalizeMarkdownListIndent(cell.source || '');
     if (source.trim()) {
       const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
@@ -580,7 +626,7 @@ const Renderer = (() => {
     const markupEl = cellEl.querySelector('.cell-markup');
     if (!markupEl || !markupWrapper) return;
 
-    const source = markupWrapper.dataset.source || '';
+    const source = normalizeMarkdownListIndent(markupWrapper.dataset.source || '');
     if (source.trim()) {
       const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
@@ -1044,9 +1090,10 @@ const Renderer = (() => {
       const mdEl = document.createElement('div');
       mdEl.className = 'cell-markup';
 
-      // 라인 번호 매핑을 위해 토큰 단위로 렌더링
-      const tokens = marked.lexer(escapeGfmSingleTildes(content || ''));
-      const html = renderMarkdownWithLineNumbers(tokens, content || '');
+      // 라인 번호 매핑을 위해 토큰 단위로 렌더링 (리스트 들여쓰기 정규화 후)
+      const normalized = normalizeMarkdownListIndent(content || '');
+      const tokens = marked.lexer(escapeGfmSingleTildes(normalized));
+      const html = renderMarkdownWithLineNumbers(tokens, normalized);
       mdEl.innerHTML = DOMPurify.sanitize(html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
         // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
@@ -1264,6 +1311,9 @@ const Renderer = (() => {
   let currentCursorCellIndex = -1;
   let documentCursorActive = false;
   let mdDocViewMode = 'rendered'; // 'raw' | 'rendered' for markdown document view
+  // 문서(md) raw 뷰 idle 복귀 타이머 — 노트북 마크다운 셀(MARKUP_REVERT_MS)과 동일 UX.
+  // 없으면 교사가 문서를 한 번 클릭한 뒤 학생이 raw 뷰에 영구히 갇힌다 (복귀 호출 부재).
+  let docRevertTimer = null;
   let measureCanvas = null;
 
   function showTeacherCursor(data) {
@@ -1814,9 +1864,14 @@ const Renderer = (() => {
     if (autoScroll && autoScroll.checked) {
       scrollToCursorElement();
     }
+
+    // idle 후 rendered 뷰로 자동 복귀 (커서 이벤트마다 재장전)
+    if (docRevertTimer) clearTimeout(docRevertTimer);
+    docRevertTimer = setTimeout(() => { docRevertTimer = null; removeDocumentCursor(); }, MARKUP_REVERT_MS);
   }
 
   function removeDocumentCursor() {
+    if (docRevertTimer) { clearTimeout(docRevertTimer); docRevertTimer = null; }
     removeCursorOverlays();
     documentCursorActive = false;
 
