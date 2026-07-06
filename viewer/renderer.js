@@ -338,7 +338,7 @@ const Renderer = (() => {
    */
   function resetCursorState() {
     if (markupRevertTimer) { clearTimeout(markupRevertTimer); markupRevertTimer = null; }
-    if (docRevertTimer) { clearTimeout(docRevertTimer); docRevertTimer = null; }
+    lastDocCursorTime = 0;
     cursorElement = null;
     selectionElement = null;
     currentCursorCellIndex = -1;
@@ -1368,9 +1368,12 @@ const Renderer = (() => {
   let currentCursorCellIndex = -1;
   let documentCursorActive = false;
   let mdDocViewMode = 'rendered'; // 'raw' | 'rendered' for markdown document view
-  // 문서(md) raw 뷰 idle 복귀 타이머 — 노트북 마크다운 셀(MARKUP_REVERT_MS)과 동일 UX.
-  // 없으면 교사가 문서를 한 번 클릭한 뒤 학생이 raw 뷰에 영구히 갇힌다 (복귀 호출 부재).
-  let docRevertTimer = null;
+  // 문서(md) raw 뷰 복귀는 '시간'이 아니라 '교사의 다음 행동(에디터 스크롤)' 신호로만 한다.
+  // (과거 3초 idle 타이머는 강사가 아무것도 안 해도 커서가 사라지고, raw↔rendered 높이
+  //  차이로 스크롤이 튀는 문제를 만들었다. 강사가 가만히 있으면 학생 뷰도 그대로여야 한다.)
+  let lastDocCursorTime = 0;
+  // 드래그 선택 중 화면 가장자리 스크롤은 cursor:position이 연속 발생 — 이 가드로 걸러진다
+  const DOC_RAW_SCROLL_REVERT_GUARD_MS = 2000;
   let measureCanvas = null;
 
   function showTeacherCursor(data) {
@@ -1858,7 +1861,7 @@ const Renderer = (() => {
    * Markdown document: switch from raw source view back to rendered view
    * 커서가 사라지면 렌더된 마크다운으로 전환 (스크롤 위치 보존)
    */
-  function switchDocToRenderedMode() {
+  function switchDocToRenderedMode(skipScrollRestore) {
     const contentEl = document.getElementById('document-content');
     if (!contentEl) return;
     const wrapper = document.querySelector('.plaintext-document');
@@ -1880,7 +1883,8 @@ const Renderer = (() => {
     renderDocumentContent(content, 'markdown', contentEl);
     mdDocViewMode = 'rendered';
 
-    // 스크롤 위치 복원
+    // 스크롤 위치 복원 (스크롤 신호 기반 복귀 시에는 뒤따르는 줄 앵커가 위치를 잡으므로 생략)
+    if (skipScrollRestore) return;
     requestAnimationFrame(() => {
       const newDocHeight = document.documentElement.scrollHeight;
       const newMaxScroll = newDocHeight - winHeight;
@@ -1922,13 +1926,28 @@ const Renderer = (() => {
       scrollToCursorElement();
     }
 
-    // idle 후 rendered 뷰로 자동 복귀 (커서 이벤트마다 재장전)
-    if (docRevertTimer) clearTimeout(docRevertTimer);
-    docRevertTimer = setTimeout(() => { docRevertTimer = null; removeDocumentCursor(); }, MARKUP_REVERT_MS);
+    // 자동(시간 기반) 복귀 없음 — 커서/선택은 강사의 다음 행동까지 그대로 유지된다.
+    // md raw 뷰의 rendered 복귀는 maybeRevertDocRawOnTeacherScroll()(교사 스크롤 신호)이 담당.
+    lastDocCursorTime = Date.now();
+  }
+
+  /**
+   * 교사의 '실제 에디터 스크롤'이 도착했을 때 md 문서 raw 뷰를 rendered로 복귀시킨다.
+   * 스크롤 = 설명을 마치고 다음으로 넘어간다는 명시적 신호. 복귀 직후 같은 scroll:sync의
+   * 줄 앵커가 rendered 뷰(data-line)에 정확히 적용되므로 위치 점프가 없다.
+   * 드래그 선택 중의 부수 스크롤은 cursor:position이 계속 오므로 2초 가드로 걸러진다.
+   */
+  function maybeRevertDocRawOnTeacherScroll() {
+    if (mdDocViewMode !== 'raw') return;
+    if (Date.now() - lastDocCursorTime < DOC_RAW_SCROLL_REVERT_GUARD_MS) return;
+    removeCursorOverlays();
+    documentCursorActive = false;
+    // 뒤따르는 scroll:sync 앵커가 위치를 잡으므로 자체 비율 복원은 생략 (rAF 복원이
+    // 앵커 스크롤을 덮어써 튀는 것 방지)
+    switchDocToRenderedMode(true);
   }
 
   function removeDocumentCursor() {
-    if (docRevertTimer) { clearTimeout(docRevertTimer); docRevertTimer = null; }
     removeCursorOverlays();
     documentCursorActive = false;
 
@@ -1952,6 +1971,7 @@ const Renderer = (() => {
     showTeacherCursor,
     showDocumentCursor,
     removeDocumentCursor,
+    maybeRevertDocRawOnTeacherScroll,
     scrollToRatio,
     scrollToDocumentAnchor,
     scrollToNotebookAnchor,

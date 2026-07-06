@@ -893,6 +893,12 @@
     // Teacher Preview: 실제 에디터 스크롤(source:'editor')은 따라가되, 자신이 보낸 에코(source 없음)는 무시
     if (isTeacherPreview && data.source !== 'editor') return;
 
+    // md 문서 raw 뷰: 교사의 에디터 스크롤 = '다음 행동' 신호 → rendered로 복귀.
+    // auto-scroll 체크보다 앞에 둬서 설정과 무관하게 모든 학생의 view 모드를 일관되게 유지.
+    if (data.type === 'plaintext' && documentType === 'plaintext') {
+      Renderer.maybeRevertDocRawOnTeacherScroll();
+    }
+
     // Auto-scroll 체크
     const autoScroll = document.getElementById('auto-scroll');
     if (!autoScroll || !autoScroll.checked) return;
