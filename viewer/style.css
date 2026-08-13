@@ -631,12 +631,15 @@ header {
   background: var(--bg-cell);
   color: var(--text-secondary);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s;
+  /* 마우스를 올리지 않아도 항상 보인다. 학생이 버튼의 존재를 알아야 쓰고,
+     터치 기기에는 hover 자체가 없다. */
+  opacity: 1;
+  transition: border-color 0.2s, color 0.2s;
 }
 
-.cell-code:hover .copy-btn {
-  opacity: 1;
+.copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
 }
 
 .copy-btn.copied {
@@ -654,8 +657,6 @@ header {
   top: 5px;
   left: 6px;
   right: auto;
-  opacity: 0;
-  transition: opacity 0.2s;
 }
 
 /* 마크다운 셀은 왼쪽 게터가 없으므로, 본문 상단에 버튼 높이만큼 자리를 비워
@@ -664,17 +665,6 @@ header {
   padding-top: 32px;
 }
 
-.cell-markup-wrapper:hover .copy-btn {
-  opacity: 1;
-}
-
-/* 터치 기기(태블릿·폰)는 hover가 없어 버튼이 영영 안 보인다 → 항상 표시 */
-@media (hover: none) {
-  .cell-code .copy-btn,
-  .cell-markup-wrapper .copy-btn {
-    opacity: 0.55;
-  }
-}
 
 .cell-markup {
   padding: 12px 16px;
@@ -2039,6 +2029,13 @@ footer label {
   background: var(--bg-active);
   color: var(--accent);
   font-weight: 600;
+  /* 항목이 많고 일부가 생략된 트리에서도 지금 보고 있는 파일이 바로 눈에 띄어야 한다 */
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* 활성 파일의 상위 폴더도 옅게 표시해 어디에 있는지 따라가기 쉽게 한다 */
+.file-tree-row.dir.on-active-path > .tree-name {
+  color: var(--accent);
 }
 
 .tree-name {
@@ -2070,6 +2067,27 @@ footer label {
   padding: 4px 10px;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* 서버가 자식을 다 못 보낸 폴더에 붙는 '더 보기' 행 */
+.file-tree-more {
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.file-tree-more:hover {
+  background: var(--bg-active);
+  text-decoration: underline;
+}
+
+.file-tree-more[data-loading='1'] {
+  color: var(--text-muted);
+  cursor: default;
+  text-decoration: none;
 }
 
 /* === 단일 이미지 공유 (image:full) === */
@@ -2473,20 +2491,6 @@ footer label {
   top: 5px;
   left: 6px;
   right: auto;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.term-card:hover .copy-btn {
-  opacity: 1;
-}
-
-/* 터치 기기는 hover가 없어 버튼이 영영 안 보인다 → 항상 표시.
-   위의 .term-card:hover 규칙과 명시도가 같으므로 반드시 뒤에 와야 이긴다. */
-@media (hover: none) {
-  .term-card .copy-btn {
-    opacity: 0.55;
-  }
 }
 
 /* === 툴바 Terminal 버튼 배지 === */

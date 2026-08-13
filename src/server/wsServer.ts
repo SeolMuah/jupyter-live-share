@@ -16,6 +16,8 @@ interface ClientMeta {
   lastMessageTimes: number[];
   countedAsViewer: boolean; // Track if this client has been counted in viewerCount
   countedAsChatOnly: boolean; // Track if this client has been counted in chatOnlyCount
+  lastExpandAt?: number; // 탐색기 '더 보기' 요청 스로틀용
+  expandInFlight?: boolean; // 소켓당 동시 확장 요청 1건 제한
 }
 
 interface PollState {
@@ -384,6 +386,26 @@ export function startWsServer(
         // All other messages require authentication
         if (!meta.authenticated) return;
 
+        if (msg.type === 'explorer:expand') {
+          if (!explorerExpandHandler) return;
+          // 소켓당 동시 1건. 200ms 간격은 '시작' 간격일 뿐이라, 큰 디렉터리 요청이
+          // 소켓 하나에서도 무한정 중첩될 수 있다. 디스크 읽기는 확장 호스트
+          // 이벤트 루프를 쓰므로 여기서 막지 않으면 수업 전체가 느려진다.
+          if (meta.expandInFlight) return;
+          const now = Date.now();
+          const last = meta.lastExpandAt || 0;
+          if (now - last < EXPAND_MIN_INTERVAL_MS) return;
+          meta.lastExpandAt = now;
+          const path = (msg.data as { path?: unknown } | undefined)?.path;
+          if (typeof path !== 'string' || path.length > 1024) return;
+          meta.expandInFlight = true;
+          void explorerExpandHandler(path)
+            .then((payload) => { if (payload) sendTo(ws, 'explorer:children', payload); })
+            .catch((err) => Logger.warn(`explorer:expand failed: ${String(err)}`))
+            .finally(() => { meta.expandInFlight = false; });
+          return;
+        }
+
         if (msg.type === 'join:name') {
           const nameData = msg.data as { nickname: string };
           const nickname = (nameData.nickname || '').trim().slice(0, 30);
@@ -604,6 +626,15 @@ export function setLastScrollSync(data: unknown): void { lastScrollSync = data; 
 // 핸들러를 말없이 덮어써서, 새로 들어온 학생이 notebook:full 같은 초기 상태를 하나도
 // 못 받는 사고가 날 수 있었다. 이제 여러 모듈이 각자 등록하고 각자 해제한다.
 const newViewerListeners: Array<(ws: WebSocket) => void> = [];
+
+// 탐색기 '더 보기' 처리기. explorerTree가 wsServer를 import 하므로 역방향 import 대신
+// 콜백을 주입받는다(순환 의존 방지).
+let explorerExpandHandler: ((path: string) => Promise<unknown>) | null = null;
+export function setExplorerExpandHandler(fn: ((path: string) => Promise<unknown>) | null): void {
+  explorerExpandHandler = fn;
+}
+// 소켓별 확장 요청 스로틀: 학생이 트리를 연타해 디스크 읽기를 유발하지 못하게 한다
+const EXPAND_MIN_INTERVAL_MS = 200;
 
 /**
  * 신규 접속자(join 성공) 시 호출될 리스너를 등록한다.

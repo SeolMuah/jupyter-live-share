@@ -4,7 +4,7 @@ import { broadcast, sendTo, addNewViewerListener, getCurrentPollState, getDrawSt
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
 import { getConfig } from '../utils/config';
-import { startExplorerWatch, stopExplorerWatch, getExplorerTree } from './explorerTree';
+import { startExplorerWatch, stopExplorerWatch, getExplorerTree, setExplorerActivePath } from './explorerTree';
 import { buildImagePayload, IMAGE_EXTS, ImageFullPayload } from './imageShare';
 import { resolveLocalImages, resolveLocalImagesCacheOnly, preOptimizeImages, clearImageCache, hasImagePatterns, setProjectRoot, setOnImagesOptimized } from '../utils/imageResolver';
 import WebSocket from 'ws';
@@ -379,6 +379,8 @@ function switchToNotebook(notebook: vscode.NotebookDocument) {
   const rawText = imageShareEnabled ? collectNotebookRawText(notebook) : '';
 
   const serialized = serializeNotebook(notebook, activeCellIndex);
+  // 탐색기에서 이 파일은 예산과 무관하게 항상 보이게 한다
+  setExplorerActivePath(serialized.filePath);
   resolveNotebookImages(serialized, baseDir);
   broadcast('notebook:full', serialized);
   // Seed the join cache with the payload we just built (activeCellIndex gets overwritten
@@ -503,6 +505,7 @@ function switchToTextDocument(document: vscode.TextDocument) {
   startWatchingTextDocument(document);
 
   const serialized = serializeTextDocument(document);
+  setExplorerActivePath(serialized.filePath);
   const baseDir = getBaseDir();
 
   // Pre-optimize using original content, then resolve for broadcast

@@ -80,6 +80,7 @@
   const expandedTreePaths = new Set(); // 펼쳐진 디렉터리 경로 — 재렌더 시 상태 보존
   let treeRowByPath = new Map();    // path → { row, childrenBox|null } (렌더마다 재구축)
   let activeFilePath = null;        // 마지막 filePath — explorer:tree가 늦게 와도 렌더 시 적용
+  const pendingExpandPaths = new Set(); // '더 보기' 요청을 보낸 경로 (중복 요청 방지)
   // 반응형 모드 감지: 고정 브레이크포인트가 아니라 '실제 여유 공간'으로 동적 판정.
   // 필요폭 = 트리 240 + 코드 992(판서 좌표계 고정폭) + (채팅이 열려 있으면 채팅 실측 폭).
   // 채팅을 닫으면(또는 접으면) 같은 뷰포트에서도 여유가 생겨 트리가 자동으로 in-flow 표시된다.
@@ -580,6 +581,10 @@
         handleExplorerTree(msg.data);
         break;
 
+      case 'explorer:children':
+        handleExplorerChildren(msg.data);
+        break;
+
       case 'document:update':
         handleDocumentUpdate(msg.data);
         break;
@@ -1022,6 +1027,46 @@
     refreshTreeMode();
   }
 
+  /**
+   * 폴더 확장 요청. 서버가 거부하면 응답이 아예 오지 않으므로 반드시 타임아웃을 건다.
+   * 타임아웃이 없으면 그 경로가 pending에 영원히 남아 재시도가 막힌다.
+   */
+  function requestExpand(path, onTimeout) {
+    if (!path || pendingExpandPaths.has(path)) return;
+    pendingExpandPaths.add(path);
+    WsClient.send('explorer:expand', { path: path });
+    setTimeout(() => {
+      if (!pendingExpandPaths.delete(path)) return; // 이미 응답을 받았으면 아무것도 하지 않는다
+      if (onTimeout) onTimeout();
+    }, 5000);
+  }
+
+  /** '더 보기' 응답: 해당 경로의 자식을 트리에 채워 넣는다 */
+  function handleExplorerChildren(data) {
+    if (!data || typeof data.path !== 'string' || !Array.isArray(data.nodes)) return;
+    pendingExpandPaths.delete(data.path);
+    if (!fileTreeData || !Array.isArray(fileTreeData.tree)) return;
+
+    const parts = data.path.split('/').filter(Boolean);
+    let level = fileTreeData.tree;
+    let target = null;
+    for (const part of parts) {
+      if (!Array.isArray(level)) return;
+      target = level.find((x) => x && x.n === part && x.t === 'd');
+      if (!target) return; // 트리가 그사이 바뀌었으면 무시(다음 explorer:tree가 정리한다)
+      if (!Array.isArray(target.c)) target.c = [];
+      level = target.c;
+    }
+    if (!target) return;
+
+    target.c = data.nodes;
+    delete target.m;
+    // 서버 상한에 걸려 일부만 왔다면, 다시 눌러도 같은 앞부분만 오므로 안내만 남긴다
+    target.partial = data.more === true;
+    expandedTreePaths.add(data.path);
+    renderFileTree();
+  }
+
   // 트리 전체 재렌더. 펼침/접힘 상태는 expandedTreePaths(경로 기준)로 보존된다.
   // ★ XSS: 파일/폴더명은 신뢰불가 입력 — 반드시 createElement + textContent로만 삽입.
   function renderFileTree() {
@@ -1031,10 +1076,11 @@
     fileTreeBody.innerHTML = ''; // 자식 전부 제거 (빈 문자열 — 외부 입력 아님)
     const frag = document.createDocumentFragment();
     buildTreeLevel(Array.isArray(fileTreeData.tree) ? fileTreeData.tree : [], '', 0, frag);
-    if (fileTreeData.truncated) {
+    // 폴더마다 '더 보기'가 붙으므로, 하단 안내는 최상위 목록 자체가 잘린 경우에만 띄운다
+    if (fileTreeData.rootMore) {
       const note = document.createElement('div');
       note.className = 'file-tree-truncated';
-      note.textContent = '… (일부 생략)';
+      note.textContent = '… 최상위 항목이 너무 많아 일부만 표시합니다';
       frag.appendChild(note);
     }
     fileTreeBody.appendChild(frag);
@@ -1068,6 +1114,39 @@
         buildTreeLevel(Array.isArray(node.c) ? node.c : [], path, depth + 1, childrenBox);
         container.appendChild(childrenBox);
 
+        // 서버가 예산 때문에 자식을 다 못 보낸 디렉터리: '더 보기' 행을 붙인다.
+        // 누르면 그 폴더만 서버에 요청해 받아온다(전체를 미리 보내면 50명에게 매번
+        // 큰 페이로드가 나가므로, 필요한 사람이 필요한 폴더만 받는다).
+        // 아직 자식을 하나도 못 받은 폴더는 행을 따로 만들지 않는다. 폴더를 펼치면
+        // 자동으로 요청되므로, 모든 폴더에 '더 보기'가 붙어 지저분해지는 것을 막는다.
+        const hasSomeChildren = Array.isArray(node.c) && node.c.length > 0;
+        if (node.m === 1 && hasSomeChildren) {
+          const more = document.createElement('div');
+          more.className = 'file-tree-more';
+          more.style.paddingLeft = (8 + (depth + 1) * 12) + 'px';
+          more.textContent = '… 더 보기';
+          more.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            if (more.dataset.loading === '1') return;
+            more.dataset.loading = '1';
+            more.textContent = '… 불러오는 중';
+            requestExpand(path, () => {
+              if (!more.isConnected) return;
+              more.dataset.loading = '';
+              more.textContent = '… 더 보기';
+            });
+          });
+          childrenBox.appendChild(more);
+        }
+
+        if (node.partial) {
+          const note = document.createElement('div');
+          note.className = 'file-tree-truncated';
+          note.style.paddingLeft = (8 + (depth + 1) * 12) + 'px';
+          note.textContent = '… 항목이 많아 일부만 표시합니다';
+          childrenBox.appendChild(note);
+        }
+
         const expanded = expandedTreePaths.has(path);
         row.classList.toggle('expanded', expanded);
         childrenBox.style.display = expanded ? '' : 'none';
@@ -1078,6 +1157,8 @@
           else expandedTreePaths.delete(path);
           row.classList.toggle('expanded', nowExpanded);
           childrenBox.style.display = nowExpanded ? '' : 'none';
+          // 아직 자식을 못 받은 폴더는 펼치는 순간 자동으로 요청한다
+          if (nowExpanded && node.m === 1) requestExpand(path);
         });
 
         treeRowByPath.set(path, { row, childrenBox });
@@ -1101,9 +1182,22 @@
     if (!fileTreeBody) return;
     const prev = fileTreeBody.querySelector('.file-tree-row.active');
     if (prev) prev.classList.remove('active');
+    fileTreeBody.querySelectorAll('.file-tree-row.on-active-path')
+      .forEach((el) => el.classList.remove('on-active-path'));
     if (!activeFilePath || !fileTreeReceived) return;
     const entry = treeRowByPath.get(activeFilePath);
-    if (!entry) return; // 트리에 없는 경로는 무시
+    if (!entry) {
+      // 트리에 아직 없는 경로: 가장 깊은 '아는' 상위 폴더를 요청해 끌어온다
+      const segs = activeFilePath.split('/');
+      let known = '';
+      for (let i = 0; i < segs.length - 1; i++) {
+        const cand = known ? known + '/' + segs[i] : segs[i];
+        if (!treeRowByPath.has(cand)) break;
+        known = cand;
+      }
+      if (known) requestExpand(known);
+      return;
+    }
     // 조상 디렉터리 자동 펼침
     const parts = activeFilePath.split('/');
     let prefix = '';
@@ -1113,6 +1207,7 @@
       if (dir && dir.childrenBox) {
         expandedTreePaths.add(prefix);
         dir.row.classList.add('expanded');
+        dir.row.classList.add('on-active-path');
         dir.childrenBox.style.display = '';
       }
     }
