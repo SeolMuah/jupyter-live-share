@@ -12,6 +12,43 @@ const Renderer = (() => {
   let mermaidReady = false;
   let mermaidCounter = 0;
 
+  /**
+   * DOMPurify 안전 래퍼.
+   * CDN(cdnjs)이 SRI 불일치·차단·오프라인으로 막히면 DOMPurify가 정의되지 않는데,
+   * 그때 sanitize를 직접 부르면 ReferenceError가 renderNotebook 루프를 통째로 중단시켜
+   * 학생 화면이 빈 페이지가 된다. 살균기가 없으면 HTML을 신뢰하지 않고
+   * 이스케이프한 평문으로 떨어뜨린다(렌더는 계속, 보안은 유지).
+   */
+  let sanitizeFallbackWarned = false;
+  function hasSanitizer() {
+    return typeof DOMPurify !== 'undefined' && DOMPurify && typeof DOMPurify.sanitize === 'function';
+  }
+
+  /** 태그를 제거하고 텍스트만 남긴다 (살균기 부재 시 최후 폴백) */
+  function stripTags(html) {
+    return String(html == null ? '' : html).replace(/<[^>]*>/g, '');
+  }
+
+  /**
+   * 살균된 HTML을 요소에 넣는다. 살균기가 없으면 HTML로 넣지 않고
+   * 읽을 수 있는 평문(마크다운 원본 등)으로 대체한다.
+   */
+  function setSanitizedHtml(el, html, options, plainFallback) {
+    if (hasSanitizer()) {
+      el.innerHTML = DOMPurify.sanitize(html, options);
+      return true;
+    }
+    warnSanitizerMissing();
+    el.textContent = plainFallback != null ? plainFallback : stripTags(html);
+    return false;
+  }
+
+  function warnSanitizerMissing() {
+    if (sanitizeFallbackWarned) return;
+    sanitizeFallbackWarned = true;
+    console.warn('[JLS] DOMPurify를 불러오지 못해 HTML을 평문으로 표시합니다 (CDN 차단 가능성).');
+  }
+
   /** mermaid.initialize()를 필요 시 1회(또는 테마 변경 시) 수행 */
   function ensureMermaid() {
     if (mermaidReady || !window.mermaid) return mermaidReady;
@@ -359,7 +396,15 @@ const Renderer = (() => {
     resetCursorState();
     container.innerHTML = '';
     notebook.cells.forEach((cell, index) => {
-      const el = renderCell(cell, index);
+      // 셀 하나가 던져도 나머지 셀 렌더링을 멈추지 않는다
+      // (예전엔 예외 하나로 노트북 전체가 빈 화면이 됐다)
+      let el;
+      try {
+        el = renderCell(cell, index);
+      } catch (err) {
+        console.error('[JLS] cell render failed at index', index, err);
+        el = renderCellFallback(cell, index);
+      }
       container.appendChild(el);
     });
 
@@ -367,6 +412,27 @@ const Renderer = (() => {
     if (notebook.activeCellIndex >= 0) {
       setActiveCell(notebook.activeCellIndex);
     }
+  }
+
+
+  /** 렌더 실패 셀을 원본 소스 평문으로라도 보여주는 대체 셀 */
+  function renderCellFallback(cell, index) {
+    const cellEl = document.createElement('div');
+    let kind = 'code';
+    try { kind = cell && cell.kind === 'markup' ? 'markup' : 'code'; } catch (e) { /* 무시 */ }
+    cellEl.className = `cell cell-${kind}`;
+    cellEl.dataset.index = String(index);
+    cellEl.id = `cell-${index}`;
+    const pre = document.createElement('pre');
+    pre.className = 'cell-fallback';
+    // 대체 셀을 만드는 도중 다시 던지면 렌더 루프가 또 멈춘다 — 여기서만큼은 절대 던지지 않는다
+    try {
+      pre.textContent = (cell && cell.source) || '';
+    } catch (e) {
+      pre.textContent = '';
+    }
+    cellEl.appendChild(pre);
+    return cellEl;
   }
 
   /**
@@ -404,12 +470,12 @@ const Renderer = (() => {
     if (source.trim()) {
       const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
-      content.innerHTML = DOMPurify.sanitize(html, {
+      setSanitizedHtml(content, html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
         // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
         // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
         FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
-      });
+      }, source);
     }
 
     // highlight.js로 코드 블록 하이라이팅
@@ -530,7 +596,10 @@ const Renderer = (() => {
       // 같은 데이터의 여러 MIME 표현 중 가장 풍부한 것 하나만 렌더링
       const bestItem = pickBestMimeItem(output.items);
       if (bestItem) {
-        const el = renderOutputItem(bestItem);
+        // DOMPurify를 못 불러온 상황에서 text/html 대신 보여줄 읽기 좋은 대체 표현
+        // (예: DataFrame의 text/plain repr). 태그 소스를 그대로 노출하지 않기 위함.
+        const plainItem = output.items.find((i) => i.mime === 'text/plain');
+        const el = renderOutputItem(bestItem, plainItem ? plainItem.data : null);
         if (el) container.appendChild(el);
       }
     }
@@ -541,10 +610,17 @@ const Renderer = (() => {
   /**
    * Render single output item by MIME type
    */
-  function renderOutputItem(item) {
+  function renderOutputItem(item, plainFallback) {
     const { mime, data } = item;
 
     if (mime === 'text/html') {
+      // 살균기가 없으면 HTML을 렌더하지 않는다. 태그 소스를 그대로 보여주면
+      // DataFrame 출력이 <table border="1"...> 덩어리로 보이므로 text/plain repr로 대체한다.
+      if (!hasSanitizer()) {
+        const pre = document.createElement('pre');
+        pre.textContent = plainFallback != null ? plainFallback : stripTags(data);
+        return pre;
+      }
       const div = document.createElement('div');
       // Sanitize HTML output - allow inline style attribute but NOT <style> tags
       // <style> tags can be exploited for CSS-based attacks (data exfiltration, UI spoofing)
@@ -597,8 +673,16 @@ const Renderer = (() => {
       const div = document.createElement('div');
       div.className = 'cell-output-error';
       try {
+        // VS Code(NotebookCellOutputItem.error)는 {name, message, stack},
+        // .ipynb 원본은 {ename, evalue, traceback} 형태 — 둘 다 지원한다.
+        // (name/message만 읽던 시절엔 실행 오류가 'undefined: undefined'로 보였다)
         const errorData = JSON.parse(data);
-        div.textContent = `${errorData.ename}: ${errorData.evalue}\n${(errorData.traceback || []).join('\n')}`;
+        const name = errorData.ename || errorData.name || 'Error';
+        const message = errorData.evalue || errorData.message || '';
+        const detail = Array.isArray(errorData.traceback)
+          ? errorData.traceback.join('\n')
+          : (errorData.stack || '');
+        div.textContent = `${name}: ${message}${detail ? '\n' + detail : ''}`;
       } catch {
         div.textContent = data;
       }
@@ -630,12 +714,12 @@ const Renderer = (() => {
     if (source.trim()) {
       const tokens = marked.lexer(escapeGfmSingleTildes(source));
       const html = renderMarkdownWithLineNumbers(tokens, source);
-      markupEl.innerHTML = DOMPurify.sanitize(html, {
+      setSanitizedHtml(markupEl, html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
         // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
         // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
         FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
-      });
+      }, source);
       markupEl.querySelectorAll('pre code').forEach((block) => {
         if (block.classList.contains('language-mermaid')) return; // mermaid는 다이어그램으로 렌더
         hljs.highlightElement(block);
@@ -665,6 +749,12 @@ const Renderer = (() => {
    */
   function updateCellSource(index, source) {
     const cellEl = document.getElementById(`cell-${index}`);
+    // 렌더 실패로 대체된 셀은 평문 갱신만 한다 (그대로 두면 교사가 타이핑해도 멈춰 보인다)
+    const fallbackEl = cellEl && cellEl.querySelector('.cell-fallback');
+    if (fallbackEl) {
+      fallbackEl.textContent = source || '';
+      return;
+    }
     if (!cellEl) {
       console.error('[JLS] updateCellSource FAIL — DOM cell-' + index + ' not found');
       return;
@@ -1019,7 +1109,13 @@ const Renderer = (() => {
       const added = change.addedCells;
       const refNode = container.children[index] || null; // 삽입 지점의 기준 노드(라이브 컬렉션)
       const frag = document.createDocumentFragment();
+      try {
       added.forEach((cell, i) => frag.appendChild(renderCell(cell, index + i)));
+    } catch (err) {
+      // 여기서 던지면 DOM 셀 수와 상태가 영구히 어긋난다 → 전체 재렌더에 맡긴다
+      console.error('[JLS] incremental insert failed, falling back to full render', err);
+      return false;
+    }
       container.insertBefore(frag, refNode);
     } else {
       const removedCount = change.removedCount || 1;
@@ -1151,12 +1247,12 @@ const Renderer = (() => {
       const normalized = normalizeMarkdownListIndent(content || '');
       const tokens = marked.lexer(escapeGfmSingleTildes(normalized));
       const html = renderMarkdownWithLineNumbers(tokens, normalized);
-      mdEl.innerHTML = DOMPurify.sanitize(html, {
+      setSanitizedHtml(mdEl, html, {
         ADD_ATTR: ['data-line', 'class', 'style'],
         // <style> 등 위험 태그는 출력 HTML 경로와 동일하게 차단 (마크다운 raw HTML을 통한
         // 전역 CSS 주입/UI redressing 방지). 인라인 style 속성은 ADD_ATTR로 계속 허용.
         FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
-      });
+      }, normalized);
 
       // 코드 블록 하이라이팅
       mdEl.querySelectorAll('pre code').forEach((block) => {

@@ -409,7 +409,9 @@ header {
 .exec-label {
   display: flex;
   align-items: flex-start;
-  padding: 8px 4px 8px 8px;
+  /* 상단 여백은 왼쪽 게터 맨 위에 놓인 Copy 버튼 자리 (가로 스크롤과 무관하게 항상 보이도록
+     오른쪽이 아니라 왼쪽 게터에 둔다). 코드 영역(pre) 폭은 그대로라 코드와 겹치지 않는다. */
+  padding: 32px 4px 8px 8px;
   min-width: 64px;
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -612,10 +614,12 @@ header {
 
 .copy-btn {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  padding: 4px 8px;
-  font-size: 0.75rem;
+  top: 5px;
+  left: 6px;
+  padding: 3px 7px;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  z-index: 3;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-cell);
@@ -641,14 +645,29 @@ header {
 
 .cell-markup-wrapper .copy-btn {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 5px;
+  left: 6px;
+  right: auto;
   opacity: 0;
   transition: opacity 0.2s;
 }
 
+/* 마크다운 셀은 왼쪽 게터가 없으므로, 본문 상단에 버튼 높이만큼 자리를 비워
+   제목·리스트 첫 줄과 절대 겹치지 않게 한다 (가로 들여쓰기는 주지 않는다). */
+.cell-markup-wrapper .cell-markup {
+  padding-top: 32px;
+}
+
 .cell-markup-wrapper:hover .copy-btn {
   opacity: 1;
+}
+
+/* 터치 기기(태블릿·폰)는 hover가 없어 버튼이 영영 안 보인다 → 항상 표시 */
+@media (hover: none) {
+  .cell-code .copy-btn,
+  .cell-markup-wrapper .copy-btn {
+    opacity: 0.55;
+  }
 }
 
 .cell-markup {
@@ -1675,7 +1694,9 @@ footer label {
 
 .markup-raw-source {
   margin: 0;
-  padding: 12px 16px;
+  /* 상단 여백은 왼쪽 위 Copy 버튼 자리 — 교사가 이 셀을 편집할 때 나타나는 raw 뷰도
+     렌더 뷰(.cell-markup)와 같은 만큼 비워야 버튼이 첫 줄을 가리지 않는다. */
+  padding: 32px 16px 12px;
   background: var(--bg-code);
   overflow-x: auto;
 }
@@ -2089,4 +2110,16 @@ footer label {
 /* 하단 툴바 전체 복사 버튼 (VS Code webview 전용) — 첫 자식 + auto 마진으로 왼쪽 고정 */
 #btn-copy {
   margin-right: auto;
+}
+
+/* 렌더 실패 시 원본 소스만이라도 보여주는 대체 셀
+   (.cell-markup pre 등 기존 pre 규칙을 이기도록 자식 결합자로 명시도를 올린다) */
+.cell > .cell-fallback {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  background: var(--bg-code);
 }
