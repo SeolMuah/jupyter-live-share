@@ -1,3 +1,8 @@
+/**
+ * 참고: 이 모듈의 'optimize'는 이제 '읽어서 base64로 캐시한다'는 뜻이다.
+ * 이미지 축소·재인코딩은 하지 않는다(네이티브 처리 모듈을 배포본에 싣지 않는다).
+ * 함수 이름은 호출부 변경을 피하려고 그대로 뒀다.
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from './logger';
@@ -55,15 +60,6 @@ export function setOnImagesOptimized(cb: (() => void) | null): void {
 let cachedConfig: LiveShareConfig | null = null;
 let configCacheTime = 0;
 const CONFIG_CACHE_TTL = 5000; // 5 seconds
-
-let sharpAvailable = false;
-let sharpModule: any = null;
-try {
-  sharpModule = require('sharp');
-  sharpAvailable = true;
-} catch {
-  Logger.warn('sharp not available - images will not be optimized');
-}
 
 /**
  * Get cached config (avoids repeated vscode.workspace.getConfiguration calls)
@@ -340,35 +336,17 @@ async function optimizeAndCache(absPath: string): Promise<void> {
     const mime = MIME_MAP[ext];
     if (!mime) return;
 
+    // 이미지는 원본 그대로 base64로 실어 보낸다. 축소·재인코딩은 하지 않는다.
+    // (네이티브 이미지 처리 모듈은 배포본에 싣지 않는다. 예전에도 의존성 선언만
+    //  있고 실제로는 배포되지 않아 이 경로는 항상 원본 전송으로 동작했다.)
     const buffer = fs.readFileSync(absPath);
-    const OPTIMIZE_THRESHOLD = 200 * 1024; // 200KB
+    const resultBuffer: Buffer = buffer;
+    const resultMime = mime;
 
-    let resultBuffer: Buffer = buffer;
-    let resultMime = mime;
-
-    // Only optimize if sharp is available and file is large enough
-    if (sharpAvailable && buffer.length >= OPTIMIZE_THRESHOLD) {
-      try {
-        resultBuffer = Buffer.from(await optimizeWithSharp(buffer, ext, config.imageMaxWidth));
-        // Update MIME if format changed (PNG->JPEG)
-        if (ext === '.png' && resultBuffer[0] === 0xFF && resultBuffer[1] === 0xD8) {
-          resultMime = 'image/jpeg';
-        }
-        // BMP -> JPEG
-        if (ext === '.bmp') {
-          resultMime = 'image/jpeg';
-        }
-      } catch (err) {
-        Logger.warn(`sharp optimization failed for ${absPath}: ${err}`);
-        // Fall through with original buffer
-      }
-    }
-
-    // Final size check
     const base64 = resultBuffer.toString('base64');
     const base64SizeKB = Math.round((base64.length * 3) / 4 / 1024);
     if (base64SizeKB > config.imageMaxSizeKB) {
-      Logger.warn(`Image still too large after optimization: ${absPath} (${base64SizeKB}KB > ${config.imageMaxSizeKB}KB)`);
+      Logger.warn(`Image exceeds imageMaxSizeKB and is sent as-is: ${absPath} (${base64SizeKB}KB > ${config.imageMaxSizeKB}KB)`);
     }
 
     const now = Date.now();
@@ -381,42 +359,6 @@ async function optimizeAndCache(absPath: string): Promise<void> {
   }
 }
 
-/**
- * Optimize image buffer using sharp.
- */
-async function optimizeWithSharp(buffer: Buffer, ext: string, maxWidth: number): Promise<Buffer> {
-  if (!sharpModule) return buffer;
-
-  // GIF and SVG: no optimization (sharp can't handle animated GIFs well, SVG should stay as-is)
-  if (ext === '.gif' || ext === '.svg') return buffer;
-
-  // Use a single pipeline: read metadata first, then chain operations
-  let pipeline = sharpModule(buffer);
-  const metadata = await pipeline.metadata();
-
-  // After metadata(), the pipeline is consumed — create a new one for processing
-  pipeline = sharpModule(buffer);
-  if (metadata.width && metadata.width > maxWidth) {
-    pipeline = pipeline.resize(maxWidth, null, { fit: 'inside', withoutEnlargement: true });
-  }
-
-  // Format-specific optimization
-  if (ext === '.png') {
-    if (metadata.hasAlpha) {
-      return pipeline.png({ compressionLevel: 8, quality: 80 }).toBuffer();
-    } else {
-      return pipeline.jpeg({ quality: 80 }).toBuffer();
-    }
-  } else if (ext === '.jpg' || ext === '.jpeg') {
-    return pipeline.jpeg({ quality: 80 }).toBuffer();
-  } else if (ext === '.webp') {
-    return pipeline.webp({ quality: 80 }).toBuffer();
-  } else if (ext === '.bmp') {
-    return pipeline.jpeg({ quality: 80 }).toBuffer();
-  }
-
-  return buffer;
-}
 
 /**
  * Schedule background optimization for an image path.

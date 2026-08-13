@@ -2,7 +2,7 @@
   "name": "code-class-live-sharing",
   "displayName": "Code Class Live Sharing",
   "description": "Real-time classroom sharing for code files and Jupyter notebooks — students follow .ipynb, .py, .md in their browser, with drawing, polls, and chat",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "publisher": "codeclasslive",
   "license": "MIT",
   "keywords": [
@@ -154,15 +154,10 @@
           "default": "127.0.0.1",
           "description": "Network interface the local server binds to. Keep the default (127.0.0.1) unless you need direct LAN access without the tunnel — 0.0.0.0 exposes the session to everyone on your local network."
         },
-        "codeClassLive.imageMaxWidth": {
-          "type": "number",
-          "default": 1280,
-          "description": "Maximum image width in pixels for optimization (default: 1280)"
-        },
         "codeClassLive.imageMaxSizeKB": {
           "type": "number",
           "default": 2048,
-          "description": "Maximum image size in KB after optimization (default: 2048)"
+          "description": "Maximum image size in KB that can be shared (default: 2048). Larger images are not sent; shrink them first."
         },
         "codeClassLive.shareExplorer": {
           "type": "boolean",
@@ -270,7 +265,6 @@
   },
   "dependencies": {
     "express": "^4.22.2",
-    "sharp": "^0.34.5",
     "ws": "^8.21.0"
   }
 }

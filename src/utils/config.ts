@@ -5,7 +5,6 @@ export interface LiveShareConfig {
   maxViewers: number;
   tunnelProvider: 'cloudflare' | 'none';
   bindAddress: string;
-  imageMaxWidth: number;
   imageMaxSizeKB: number;
   shareExplorer: boolean;
   // 터미널 공유 설정 (VS Code 1.93 이상에서만 의미가 있다)
@@ -38,7 +37,6 @@ export function getConfig(): LiveShareConfig {
     maxViewers: cfg.get<number>('maxViewers', 100),
     tunnelProvider: cfg.get<string>('tunnelProvider', 'cloudflare') as LiveShareConfig['tunnelProvider'],
     bindAddress,
-    imageMaxWidth: cfg.get<number>('imageMaxWidth', 1280),
     imageMaxSizeKB: cfg.get<number>('imageMaxSizeKB', 2048),
     shareExplorer: cfg.get<boolean>('shareExplorer', true),
     terminalMaskSecrets: cfg.get<boolean>('terminal.maskSecrets', true) !== false,

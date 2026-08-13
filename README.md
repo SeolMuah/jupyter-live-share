@@ -24,7 +24,7 @@ A VS Code extension that lets teachers share files (.ipynb, .py, .txt, .md, etc.
 - **Teacher Preview Panel**: Preview exactly what students see, with drawing tools included
 - **Terminal Sharing (opt-in)**: Mirror one VS Code integrated terminal to students as command cards (command line, output with ANSI colors, exit code). **Off by default** — right-click a terminal tab and choose *Share This Terminal with Students*. Students must press the **Terminal** button to open the panel. Requires VS Code 1.93+ and a shell with shell integration (bash, zsh, fish, pwsh, Git Bash; **Command Prompt is not supported**)
 - **Scroll Sync**: The teacher's own editor drives student scroll — scrolling or clicking in VS Code keeps students in lockstep for both notebooks (cell anchor) and text files (line/block anchor), accurately regardless of font size or window size (no separate preview required)
-- **Local Image Sharing**: Local images in Markdown/HTML are auto-converted to base64 for transmission
+- **Local Image Sharing**: Local images in Markdown/HTML are auto-converted to base64 for transmission. Images are sent as-is without re-encoding, so keep them under `codeClassLive.imageMaxSizeKB` (default 2048KB) and shrink large photos before sharing
 - **Cloudflare Tunnel**: External HTTPS access without a dedicated server
 - **100 Concurrent Viewers**: Supports classroom-scale connections (configurable)
 - **Dark/Light Mode**: Theme toggle in the viewer
