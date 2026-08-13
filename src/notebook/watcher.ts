@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { broadcast, sendTo, setOnNewViewer, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync, setLastScrollSync } from '../server/wsServer';
+import { broadcast, sendTo, addNewViewerListener, getCurrentPollState, getDrawStrokes, clearDrawStrokes, getLastScrollSync, clearLastScrollSync, setLastScrollSync } from '../server/wsServer';
 import { serializeCell, serializeOutputs, serializeNotebook, serializeTextDocument, SerializedNotebook, SerializedCell } from './serializer';
 import { Logger } from '../utils/logger';
 import { getConfig } from '../utils/config';
@@ -563,12 +563,18 @@ function getCellIndexFromUri(cellUri: vscode.Uri, notebook: vscode.NotebookDocum
   return -1;
 }
 
+// 현재 등록된 신규 접속자 리스너. 재등록 시 먼저 해제하는 용도.
+let newViewerSub: { dispose(): void } | null = null;
+
 /**
  * Setup new viewer handler once - handles both notebook and plaintext modes
  * This prevents duplicate handler registration when switching between modes
  */
 function setupNewViewerHandler() {
-  setOnNewViewer((ws: WebSocket) => {
+  // 세션을 다시 시작하면 이 함수도 다시 불린다. 기존 등록을 먼저 해제해서
+  // 리스너가 중복으로 쌓이지 않게 하고, 항상 정확히 하나만 남게 한다.
+  newViewerSub?.dispose();
+  newViewerSub = addNewViewerListener((ws: WebSocket) => {
     if (watchMode === 'notebook' && currentNotebook) {
       const editor = vscode.window.activeNotebookEditor;
       const activeCellIndex = editor?.selections?.length ? editor.selections[0].start : 0;

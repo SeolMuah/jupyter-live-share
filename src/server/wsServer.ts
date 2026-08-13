@@ -309,9 +309,7 @@ export function startWsServer(
               });
             }
             // Don't increment viewerCount or broadcast viewers:count
-            if (onNewViewer) {
-              onNewViewer(ws);
-            }
+            notifyNewViewer(ws);
             return;
           }
 
@@ -350,9 +348,7 @@ export function startWsServer(
                 ...(currentPoll.options ? { options: currentPoll.options } : {}),
               });
             }
-            if (onNewViewer) {
-              onNewViewer(ws);
-            }
+            notifyNewViewer(ws);
             return;
           }
 
@@ -381,9 +377,7 @@ export function startWsServer(
           broadcast('viewers:count', { count: viewerCount });
           onViewerCountChange?.(viewerCount);
 
-          if (onNewViewer) {
-            onNewViewer(ws);
-          }
+          notifyNewViewer(ws);
           return;
         }
 
@@ -606,10 +600,39 @@ export function getLastScrollSync(): unknown { return lastScrollSync; }
 export function clearLastScrollSync(): void { lastScrollSync = null; }
 export function setLastScrollSync(data: unknown): void { lastScrollSync = data; }
 
-let onNewViewer: ((ws: WebSocket) => void) | null = null;
+// 신규 접속자 훅은 구독자 배열이다. 단일 슬롯이던 시절에는 나중에 등록한 쪽이 앞의
+// 핸들러를 말없이 덮어써서, 새로 들어온 학생이 notebook:full 같은 초기 상태를 하나도
+// 못 받는 사고가 날 수 있었다. 이제 여러 모듈이 각자 등록하고 각자 해제한다.
+const newViewerListeners: Array<(ws: WebSocket) => void> = [];
 
-export function setOnNewViewer(callback: (ws: WebSocket) => void) {
-  onNewViewer = callback;
+/**
+ * 신규 접속자(join 성공) 시 호출될 리스너를 등록한다.
+ * 반환된 dispose()로 해제하며, 두 번 호출해도 안전하다.
+ */
+export function addNewViewerListener(cb: (ws: WebSocket) => void): { dispose(): void } {
+  newViewerListeners.push(cb);
+  let disposed = false;
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      const idx = newViewerListeners.indexOf(cb);
+      if (idx >= 0) newViewerListeners.splice(idx, 1);
+    },
+  };
+}
+
+// 리스너 하나가 던져도 나머지는 반드시 실행되어야 한다. 초기 상태 전송이 서로
+// 독립적이라 한 곳의 실패가 다른 학생 화면을 비워두는 이유가 되면 안 된다.
+function notifyNewViewer(ws: WebSocket) {
+  // 콜백 안에서 dispose()가 불릴 수 있으므로 복사본을 순회한다.
+  for (const cb of [...newViewerListeners]) {
+    try {
+      cb(ws);
+    } catch (err) {
+      Logger.error('newViewer listener failed', err);
+    }
+  }
 }
 
 export function broadcast(type: string, data: unknown) {
@@ -628,6 +651,26 @@ export function broadcast(type: string, data: unknown) {
     if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
     // 한 소켓의 send가 동기적으로 throw해도 나머지 클라이언트 전파가 끊기지 않도록 격리한다.
     try { client.send(message); } catch (err) { Logger.error('broadcast send failed', err); }
+  });
+}
+
+/**
+ * 인증(join 완료)된 소켓에만 보내는 브로드캐스트.
+ * 일반 broadcast()는 join 전 유예 시간 동안 살아 있는 소켓에도 전송되므로,
+ * 강사 터미널 출력처럼 자격증명이 섞일 수 있는 내용은 이 함수를 쓴다.
+ */
+export function broadcastAuthenticated(type: string, data: unknown) {
+  if (!wss) return;
+
+  const message = JSON.stringify({ type, data });
+
+  wss.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    if (clientMeta.get(client)?.authenticated !== true) return;
+    const buffered = client.bufferedAmount;
+    if (buffered > WS_HARD_LIMIT) { if (type !== 'session:end') client.terminate(); return; }
+    if (buffered > WS_SOFT_LIMIT && EPHEMERAL_TYPES.has(type)) return;
+    try { client.send(message); } catch (err) { Logger.error('broadcastAuthenticated send failed', err); }
   });
 }
 
@@ -651,6 +694,24 @@ export function sendTo(ws: WebSocket, type: string, data: unknown) {
   }
 }
 
+/**
+ * 신규 접속자용 스냅샷 전송. sendTo와 달리 보내기 전에 백프레셔를 확인한다.
+ * 이미 SOFT limit을 넘긴 소켓에 대용량 스냅샷을 얹으면 HARD limit에 걸려 terminate되고,
+ * 뷰어가 자동 재접속해 같은 스냅샷을 다시 요구하는 자기증폭 루프가 된다.
+ * 보내지 않은 경우 false를 반환하며, 다음 재접속 때 다시 받게 된다.
+ */
+export function sendSnapshot(ws: WebSocket, type: string, data: unknown): boolean {
+  if (ws.readyState !== WebSocket.OPEN) return false;
+  if (ws.bufferedAmount > WS_SOFT_LIMIT) return false;
+  try {
+    ws.send(JSON.stringify({ type, data }));
+    return true;
+  } catch (err) {
+    Logger.error('sendSnapshot send failed', err);
+    return false;
+  }
+}
+
 export function stopWsServer(): Promise<void> {
   return new Promise((resolve) => {
     viewerCount = 0;
@@ -663,6 +724,10 @@ export function stopWsServer(): Promise<void> {
     chatMessageId = 0;
     drawStrokes = [];
     lastScrollSync = null;
+    // 신규 접속자 리스너도 세션과 함께 폐기한다. 다음 세션 시작 시 각 모듈이 다시 등록한다.
+    // 신규 뷰어 리스너는 여기서 비우지 않는다. 등록자가 각자 dispose()로 해제하는
+    // 소유 모델이라 일괄 소거하면 소유권이 깨진다. 실제로 여기서 비우면 확장 활성화 시
+    // 1회만 등록하는 terminalShare의 스냅샷 리스너가 두 번째 세션부터 영영 사라진다.
 
     if (!wss) {
       resolve();

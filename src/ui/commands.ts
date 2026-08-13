@@ -10,6 +10,13 @@ import { TeacherPreviewPanel } from './teacherPreviewPanel';
 import { ViewerChatPanelProvider } from './viewerChatPanel';
 import { getConfig } from '../utils/config';
 import { Logger } from '../utils/logger';
+import {
+  clearBuffer as clearTerminalBuffer,
+  isSharing as isTerminalSharing,
+  isShellIntegrationSupported,
+  startSharing as startTerminalSharing,
+  stopSharing as stopTerminalSharing,
+} from '../terminal/terminalShare';
 
 let tunnel: TunnelManager | null = null;
 let isRunning = false;
@@ -24,6 +31,11 @@ export function setViewerChatPanel(provider: ViewerChatPanelProvider): void {
 let isStarting = false;
 
 const CLOUDFLARED_CONSENT_KEY = 'codeClassLive.cloudflaredConsent';
+
+// 터미널 공유 확인 대화상자를 이번 세션에서 다시 묻지 않기로 했는지. 세션 시작마다 초기화한다.
+let terminalConsentSkipped = false;
+// 확인 대화상자를 기다리는 동안 재진입해 두 번 공유가 시작되는 것을 막는 래치.
+let isStartingTerminalShare = false;
 
 /**
  * cloudflared 다운로드·실행과 공개 URL 생성에 대한 1회 명시적 동의.
@@ -74,6 +86,8 @@ export async function startSession(
     return;
   }
   isStarting = true;
+  // 새 수업이 시작되므로 터미널 공유 확인 대화상자를 다시 묻는다.
+  terminalConsentSkipped = false;
 
   // 활성 에디터 확인 (노트북 또는 텍스트) — 파일 없이도 세션 시작 가능
   const notebookEditor = vscode.window.activeNotebookEditor;
@@ -322,6 +336,18 @@ async function cleanupSession(
 ) {
   isRunning = false;
 
+  // 터미널 공유 중지와 링버퍼 폐기. WS 서버가 살아 있는 동안 해야 학생에게
+  // terminal:state {sharing:false} 가 전달된다. 링버퍼를 비우지 않으면 다음 수업에
+  // 이전 수업의 출력이 남아 프라이버시 사고가 된다.
+  try {
+    stopTerminalSharing('session stopped');
+    clearTerminalBuffer();
+  } catch (err) {
+    Logger.warn(`Terminal share cleanup failed: ${err}`);
+  }
+  terminalConsentSkipped = false;
+  isStartingTerminalShare = false;
+
   // 교사 모드 채팅 패널 해제 (학생 모드 연결은 건드리지 않음)
   viewerChatPanel?.disconnectTeacher();
 
@@ -350,4 +376,108 @@ async function cleanupSession(
   sidebarView?.resetBadge();
 
   Logger.info('Session cleaned up');
+}
+
+// 터미널 공유 ---------------------------------------------------------------
+
+/**
+ * 컨텍스트 메뉴가 넘겨준 인자가 터미널인지 덕 타이핑으로 확인한다.
+ * terminal/context 계열이 넘기는 값은 VS Code 버전마다 다를 수 있어 캐스팅하지 않는다.
+ */
+function asTerminal(arg: unknown): vscode.Terminal | undefined {
+  const t = arg as { name?: unknown; sendText?: unknown } | undefined;
+  if (t && typeof t.name === 'string' && typeof t.sendText === 'function') {
+    return arg as vscode.Terminal;
+  }
+  return undefined;
+}
+
+/**
+ * 무엇이 나가고 무엇이 안 나가는지 알리는 1회 확인 대화상자.
+ * 세션당 1회만 물으며, "다시 묻지 않기"는 이번 세션에만 유효하다.
+ */
+async function confirmTerminalShare(terminalName: string): Promise<boolean> {
+  if (terminalConsentSkipped) return true;
+  const proceed = '계속';
+  const dontAsk = '이 세션에서 다시 묻지 않기';
+  const choice = await vscode.window.showWarningMessage(
+    `터미널 "${terminalName}" 을(를) 학생에게 공유할까요?`,
+    {
+      modal: true,
+      detail:
+        '학생에게 나가는 것: 이 터미널에서 실행한 명령줄, 그 출력, 작업 디렉터리, 종료 코드.\n' +
+        '나가지 않는 것: 키 입력 자체, 다른 터미널, 화면 전체를 쓰는 프로그램(vim, htop 등)의 화면.\n\n' +
+        '비밀정보 마스킹과 차단 명령 목록은 실수 방지 장치이며 보안 보장이 아닙니다. ' +
+        '자격증명이 화면에 뜰 수 있는 작업은 공유를 끄고 하세요.',
+    },
+    proceed,
+    dontAsk
+  );
+  if (choice === dontAsk) {
+    terminalConsentSkipped = true;
+    return true;
+  }
+  return choice === proceed;
+}
+
+/** shell integration을 쓸 수 없을 때의 안내. 지원 셸과 Windows 기본 프로필 변경법을 함께 준다. */
+function showShellIntegrationHelp(message: string): void {
+  vscode.window.showWarningMessage(message, {
+    modal: true,
+    detail:
+      '터미널 공유는 VS Code 1.93 이상과 셸 통합(shell integration)이 필요합니다.\n' +
+      '지원 셸: bash, zsh, fish, pwsh(PowerShell 7+), Git Bash.\n\n' +
+      'Windows에서 기본 프로필이 Command Prompt(cmd.exe)이면 지원되지 않습니다. ' +
+      '명령 팔레트에서 "Terminal: Select Default Profile"을 실행해 PowerShell을 고른 뒤 ' +
+      '터미널을 새로 열고 다시 시도하세요.',
+  });
+}
+
+async function shareTerminalCommand(arg?: unknown): Promise<void> {
+  if (!isRunning) {
+    vscode.window.showWarningMessage('먼저 Code Class Live Sharing 세션을 시작하세요.');
+    return;
+  }
+  if (isStartingTerminalShare) return;
+
+  // 컨텍스트 메뉴 인자가 없으면(명령 팔레트 실행) 활성 터미널을 쓴다.
+  const terminal = asTerminal(arg) ?? vscode.window.activeTerminal;
+  if (!terminal) {
+    vscode.window.showWarningMessage('공유할 터미널이 없습니다. 터미널을 먼저 열어 주세요.');
+    return;
+  }
+
+  if (!isShellIntegrationSupported()) {
+    showShellIntegrationHelp('이 VS Code 버전은 터미널 공유를 지원하지 않습니다.');
+    return;
+  }
+
+  isStartingTerminalShare = true;
+  try {
+    if (!(await confirmTerminalShare(terminal.name))) return;
+    await startTerminalSharing(terminal);
+    vscode.window.showInformationMessage(`터미널 "${terminal.name}" 을(를) 학생에게 공유합니다.`);
+  } catch (err) {
+    Logger.warn(`Terminal sharing failed: ${err}`);
+    showShellIntegrationHelp(err instanceof Error ? err.message : String(err));
+  } finally {
+    isStartingTerminalShare = false;
+  }
+}
+
+function stopShareTerminalCommand(): void {
+  // 공유 중이 아니면 조용히 아무것도 하지 않는다 (에러로 처리하지 않는다).
+  if (!isTerminalSharing()) return;
+  stopTerminalSharing('stopped by teacher');
+  vscode.window.showInformationMessage('터미널 공유를 중지했습니다.');
+}
+
+/** 터미널 공유 명령 2개를 등록한다. extension.ts에서 1회 호출한다. */
+export function registerTerminalCommands(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codeClassLive.shareTerminal', (arg?: unknown) => shareTerminalCommand(arg))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codeClassLive.stopShareTerminal', () => stopShareTerminalCommand())
+  );
 }

@@ -214,6 +214,17 @@
     </button>
   </div>
 
+  <!-- 강사 터미널 (하단 접이식 영역) -->
+  <section id="terminal-panel" class="terminal-panel" style="display:none;" aria-label="강사 터미널">
+    <div id="terminal-resize-handle" class="terminal-resize-handle"></div>
+    <div class="terminal-header">
+      <span class="terminal-title" id="terminal-title">Terminal</span>
+      <button id="terminal-close" class="terminal-close-btn" title="Close">&times;</button>
+    </div>
+    <div class="terminal-body" id="terminal-body"></div>
+    <button id="terminal-jump-bottom" class="terminal-jump-btn" style="display:none;">맨 아래로</button>
+  </section>
+
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
     <button id="draw-toggle" class="teacher-only" style="display:none;" title="Toggle drawing mode">
@@ -223,6 +234,7 @@
     <button id="btn-files" style="display:none;" title="Toggle file explorer">Explorer</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
+    <button id="btn-terminal" style="display:none;" title="Toggle shared terminal">Terminal<span id="terminal-badge" class="terminal-badge" style="display:none;"></span></button>
     <button id="btn-chat" title="Toggle chat">Chat</button>
     <button id="btn-download" title="Download file">Download</button>
     <label id="auto-scroll-label">
@@ -232,6 +244,7 @@
 
   <script src="renderer.js"></script>
   <script src="drawing.js"></script>
+  <script src="terminal.js"></script>
   <script src="websocket.js"></script>
   <script src="viewer.js"></script>
 </body>

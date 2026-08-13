@@ -2,7 +2,7 @@
   "name": "code-class-live-sharing",
   "displayName": "Code Class Live Sharing",
   "description": "Real-time classroom sharing for code files and Jupyter notebooks — students follow .ipynb, .py, .md in their browser, with drawing, polls, and chat",
-  "version": "2.4.6",
+  "version": "2.5.0",
   "publisher": "codeclasslive",
   "license": "MIT",
   "keywords": [
@@ -85,8 +85,44 @@
         "command": "codeClassLive.openTeacherPreview",
         "title": "Open Teacher Preview",
         "category": "Code Class Live Sharing"
+      },
+      {
+        "command": "codeClassLive.shareTerminal",
+        "title": "Share This Terminal with Students",
+        "category": "Code Class Live Sharing"
+      },
+      {
+        "command": "codeClassLive.stopShareTerminal",
+        "title": "Stop Sharing Terminal",
+        "category": "Code Class Live Sharing"
       }
     ],
+    "menus": {
+      "terminal/title/context": [
+        {
+          "command": "codeClassLive.shareTerminal",
+          "when": "!codeClassLive.terminalSharing",
+          "group": "codeClassLive@1"
+        },
+        {
+          "command": "codeClassLive.stopShareTerminal",
+          "when": "codeClassLive.terminalSharing",
+          "group": "codeClassLive@1"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "codeClassLive.shareTerminal",
+          "when": "!codeClassLive.terminalSharing",
+          "group": "codeClassLive@1"
+        },
+        {
+          "command": "codeClassLive.stopShareTerminal",
+          "when": "codeClassLive.terminalSharing",
+          "group": "codeClassLive@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "Code Class Live Sharing",
       "properties": {
@@ -132,6 +168,45 @@
           "type": "boolean",
           "default": true,
           "description": "Share the workspace file tree (names only) with students in the viewer sidebar"
+        },
+        "codeClassLive.terminal.maskSecrets": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mask secret-looking strings (API keys, tokens, private key blocks) in shared terminal output. Requires VS Code 1.93 or later. Masking is a mistake-prevention aid, not a security guarantee."
+        },
+        "codeClassLive.terminal.maxOutputKB": {
+          "type": "number",
+          "default": 64,
+          "minimum": 1,
+          "maximum": 256,
+          "description": "Maximum output size (KB) shared per terminal command. Output beyond this limit is truncated. Requires VS Code 1.93 or later."
+        },
+        "codeClassLive.terminal.maxCommands": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Number of recent terminal commands kept for students who join late. Requires VS Code 1.93 or later."
+        },
+        "codeClassLive.terminal.blockedCommandPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "^env$",
+            "^printenv\\b",
+            "^export\\b",
+            "^set$",
+            "^history\\b",
+            "^(cat|head|tail|less|more|bat|type)\\b.*(token|\\.env|\\.pem|credential|secret|password|id_rsa|\\.npmrc|\\.aws)",
+            "^sed\\b.*(token|\\.env|\\.pem|credential)",
+            "^aws\\s+configure\\b",
+            "^git\\s+remote\\s+-v\\b",
+            "^gh\\s+auth\\s+token\\b",
+            "^security\\s+find-generic-password\\b"
+          ],
+          "description": "Regular expressions (case-insensitive) for commands whose output is never shared. Requires VS Code 1.93 or later. This block list is a mistake-prevention aid, not a security guarantee."
         }
       }
     },

@@ -22,6 +22,7 @@ A VS Code extension that lets teachers share files (.ipynb, .py, .txt, .md, etc.
 - **Teacher Display Name**: Set a custom name before starting a session (default: "Teacher")
 - **Drawing/Annotation**: Draw on notebooks with pen/highlighter/eraser in the Teacher Preview panel, shared live with students
 - **Teacher Preview Panel**: Preview exactly what students see, with drawing tools included
+- **Terminal Sharing (opt-in)**: Mirror one VS Code integrated terminal to students as command cards (command line, output with ANSI colors, exit code). **Off by default** — right-click a terminal tab and choose *Share This Terminal with Students*. Students must press the **Terminal** button to open the panel. Requires VS Code 1.93+ and a shell with shell integration (bash, zsh, fish, pwsh, Git Bash; **Command Prompt is not supported**)
 - **Scroll Sync**: The teacher's own editor drives student scroll — scrolling or clicking in VS Code keeps students in lockstep for both notebooks (cell anchor) and text files (line/block anchor), accurately regardless of font size or window size (no separate preview required)
 - **Local Image Sharing**: Local images in Markdown/HTML are auto-converted to base64 for transmission
 - **Cloudflare Tunnel**: External HTTPS access without a dedicated server
@@ -141,6 +142,10 @@ Teachers can run real-time polls with students.
 | `codeClassLive.maxViewers`     | `100`         | Max concurrent viewers                       |
 | `codeClassLive.tunnelProvider` | `cloudflare`  | Tunnel provider (`cloudflare` or `none`)     |
 | `codeClassLive.bindAddress`    | `127.0.0.1`   | Server bind interface. Keep the default unless you need direct LAN access without the tunnel — `0.0.0.0` exposes the session to everyone on your local network |
+| `codeClassLive.terminal.maskSecrets` | `true` | Mask common credential patterns in shared terminal output. Best effort only, not a security guarantee |
+| `codeClassLive.terminal.maxOutputKB` | `64` | Max shared output per command (1-256 KB). Longer output is truncated |
+| `codeClassLive.terminal.maxCommands` | `50` | How many recent commands are kept and replayed to late joiners |
+| `codeClassLive.terminal.blockedCommandPatterns` | see settings | Commands whose output is never shared (`env`, `export`, `cat *.env`, ...) |
 
 ## Supported File Types
 
@@ -164,6 +169,8 @@ This extension uses [Cloudflare Tunnel](https://developers.cloudflare.com/cloudf
 ## Privacy
 
 No telemetry, no analytics, no data sent to the developer. Session data (shared files, chat, polls, drawings) travels directly from your machine to students' browsers and is never stored on a server. Full details: **[Privacy Policy](./PRIVACY.md)**.
+
+**Terminal sharing warning.** Terminal output can contain secrets that a notebook never would: API keys, `.env` contents, tokens printed by a failing command. Sharing is off by default and applies to one terminal you pick explicitly. The masking and blocked-command list are **mistake-prevention aids, not a security boundary** — they cannot catch every way a secret reaches your screen (for example `python -c "import os;print(os.environ)"`). Stop sharing before doing credential work, and keep an eye on the status bar indicator while sharing.
 
 ## Support / 문의
 

@@ -22,6 +22,12 @@
   --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --footer-height: 50px; /* fixed footer 높이 */
+  /* 강사 터미널 미러링 패널 높이. 닫혀 있으면 0px이라 --bottom-inset은 footer 높이와 같다.
+     패널이 열리면 viewer.js가 실제 픽셀값을 여기에 써 넣는다. */
+  --terminal-height: 0px;
+  --terminal-default-height: 30vh; /* 저장된 높이가 없을 때 JS가 참고하는 기본값 */
+  /* 화면 아래쪽에 고정된 요소들이 피해야 할 총 높이(footer + 터미널). */
+  --bottom-inset: calc(var(--footer-height) + var(--terminal-height));
   --chat-width: 340px;
   --chat-min-width: 240px;
   --chat-max-width: 600px;
@@ -152,7 +158,7 @@ html::-webkit-scrollbar-thumb:hover {
    코드 가림 최소화: 하단 툴바(footer) 바로 위 12px 얇은 띠 + footer와 같은 배경으로 "툴바의 연장"처럼 보이게. 넘칠 때만 표시. */
 #hscroll-proxy {
   position: fixed;
-  bottom: var(--footer-height);
+  bottom: var(--bottom-inset); /* 터미널 패널이 열리면 그 위로 밀린다 */
   height: 12px;
   overflow-x: scroll;
   overflow-y: hidden;
@@ -332,7 +338,7 @@ header {
 /* === App Layout (flex split-pane) === */
 #app-layout {
   display: flex;
-  min-height: calc(100vh - var(--header-height) - var(--footer-height));
+  min-height: calc(100vh - var(--header-height) - var(--bottom-inset));
   margin-right: var(--chat-tab-width);
   transition: margin-right 0.25s ease-out;
 }
@@ -357,7 +363,7 @@ header {
 #chat-resize-handle {
   position: fixed;
   top: var(--header-height);
-  bottom: var(--footer-height);
+  bottom: var(--bottom-inset); /* 터미널 패널이 열리면 그 위에서 끝난다 */
   right: var(--chat-width);
   width: 0;
   cursor: col-resize;
@@ -380,7 +386,7 @@ header {
 #notebook-cells::after {
   content: '';
   display: block;
-  height: calc(var(--footer-height) + 40px); /* footer 높이 + 여유 공간 */
+  height: calc(var(--bottom-inset) + 40px); /* footer + 터미널 높이 + 여유 공간 */
 }
 
 /* === Cell === */
@@ -993,7 +999,7 @@ footer label {
   position: fixed;
   top: var(--header-height);
   right: 0;
-  bottom: var(--footer-height);
+  bottom: var(--bottom-inset); /* 터미널 패널이 열리면 그 위에서 끝난다 */
   width: var(--chat-width);
   background: var(--bg-primary);
   border-left: 1px solid var(--border-color);
@@ -1953,7 +1959,7 @@ footer label {
   position: sticky;
   top: var(--header-height);
   align-self: flex-start;
-  height: calc(100vh - var(--header-height) - var(--footer-height));
+  height: calc(100vh - var(--header-height) - var(--bottom-inset));
   border-right: 1px solid var(--border-color);
 }
 
@@ -2122,4 +2128,443 @@ footer label {
   white-space: pre-wrap;
   color: var(--text-secondary);
   background: var(--bg-code);
+}
+
+/* ==========================================================================
+   강사 터미널 미러링 (Shared Terminal)
+   ========================================================================== */
+
+/* === ANSI 팔레트 (VS Code 기본 터미널 색과 유사) === */
+:root {
+  --ansi-0: #000000;
+  --ansi-1: #cd3131;
+  --ansi-2: #00a80f;
+  --ansi-3: #949800;
+  --ansi-4: #0451a5;
+  --ansi-5: #bc05bc;
+  --ansi-6: #0598bc;
+  --ansi-7: #555555;
+  --ansi-b0: #666666;
+  --ansi-b1: #cd3131;
+  --ansi-b2: #14ce14;
+  --ansi-b3: #b5ba00;
+  --ansi-b4: #0451a5;
+  --ansi-b5: #bc05bc;
+  --ansi-b6: #0598bc;
+  --ansi-b7: #a5a5a5;
+  --term-bg: #f6f8fa;
+  --term-fg: #24292f;
+  --term-header-bg: #eaeef2;
+}
+
+[data-theme="dark"] {
+  --ansi-0: #4b5563;
+  --ansi-1: #cd3131;
+  --ansi-2: #0dbc79;
+  --ansi-3: #e5e510;
+  --ansi-4: #2472c8;
+  --ansi-5: #bc3fbc;
+  --ansi-6: #11a8cd;
+  --ansi-7: #e5e5e5;
+  --ansi-b0: #767676;
+  --ansi-b1: #f14c4c;
+  --ansi-b2: #23d18b;
+  --ansi-b3: #f5f543;
+  --ansi-b4: #3b8eea;
+  --ansi-b5: #d670d6;
+  --ansi-b6: #29b8db;
+  --ansi-b7: #ffffff;
+  --term-bg: #0d1117;
+  --term-fg: #c9d1d9;
+  --term-header-bg: #161b22;
+}
+
+/* === 패널 본체 ===
+   body 직계 fixed 오버레이. left/right를 0으로 잡는 이유는 문서가 가로로 스크롤될 때도
+   배경이 뷰포트 전체 폭을 유지하게 하기 위함이다(헤더가 v2.4.3에서 같은 이유로 fixed가 됐다).
+   #app-layout은 flex row라 그 안에 넣으면 좌우 분할이 되어 버린다. 절대 넣지 않는다. */
+#terminal-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--footer-height);
+  height: var(--terminal-height);
+  min-height: 120px;   /* JS가 강제하는 값의 CSS 안전장치 */
+  max-height: 60vh;    /* 이보다 크면 판서 툴 패널(top:50%)과 겹친다 */
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+  /* z-index 345: 판서 캔버스(301)와 가로 스크롤 프록시(340) 위, footer(350) 아래,
+     판서 툴 패널(400)·투표 모달(500) 아래. 채팅 패널(200)과는 --bottom-inset 덕분에
+     데스크톱에서 영역이 겹치지 않는다. */
+  z-index: 345;
+  overflow: hidden;
+}
+
+[data-theme="dark"] #terminal-panel {
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* === 상단 리사이즈 손잡이 === */
+.terminal-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 0.15s;
+  z-index: 2;
+}
+
+.terminal-resize-handle:hover,
+.terminal-resize-handle.active {
+  background: var(--accent);
+}
+
+/* === 헤더 === */
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  min-height: 30px;
+  flex-shrink: 0;
+  background: var(--term-header-bg);
+  border-bottom: 1px solid var(--border-color);
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+}
+
+.terminal-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-close-btn {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.terminal-close-btn:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* === 본문(카드 목록) === */
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* === "맨 아래로" 버튼 === */
+.terminal-jump-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--bg-cell);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 3;
+}
+
+.terminal-jump-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* === 생략 안내(스냅샷 상한 초과) === */
+.term-omitted {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+  text-align: center;
+}
+
+/* === 명령 카드 === */
+.term-card {
+  position: relative;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-cell);
+  overflow: hidden;
+}
+
+/* 헤더 왼쪽에 Copy 버튼 자리를 비워 둔다(노트북 셀과 같은 top:5px/left:6px 위치). */
+.term-card-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px 6px 64px;
+  min-height: 28px;
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.term-prompt {
+  color: var(--accent);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.term-cmd {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.term-cwd {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+/* === 상태 배지 === */
+.term-badge {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.term-badge.running {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.term-badge.ok {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.term-badge.fail {
+  background: var(--error-bg);
+  color: var(--error-text);
+  border-color: var(--error-text);
+}
+
+.term-badge.unknown,
+.term-badge.unsupported {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+.term-badge.blocked {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-color: #c4b5fd;
+}
+
+[data-theme="dark"] .term-badge.running {
+  background: #422006;
+  color: #fbbf24;
+  border-color: #78350f;
+}
+
+[data-theme="dark"] .term-badge.ok {
+  background: #052e16;
+  color: #4ade80;
+  border-color: #166534;
+}
+
+[data-theme="dark"] .term-badge.blocked {
+  background: #2e1065;
+  color: #c4b5fd;
+  border-color: #5b21b6;
+}
+
+/* === 출력 === */
+.term-output {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  background: var(--term-bg);
+  color: var(--term-fg);
+}
+
+.term-output:empty {
+  display: none;
+}
+
+/* 10줄 초과 시 접힘. 10줄 × line-height 1.45 ≈ 14.5em */
+.term-output.collapsed {
+  max-height: 14.5em;
+  overflow-y: hidden;
+}
+
+.term-more {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.term-more:hover {
+  background: var(--bg-active);
+}
+
+/* === 카드 Copy 버튼 (노트북 셀 .copy-btn과 같은 위치·모양) === */
+.term-card .copy-btn {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  right: auto;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.term-card:hover .copy-btn {
+  opacity: 1;
+}
+
+/* 터치 기기는 hover가 없어 버튼이 영영 안 보인다 → 항상 표시.
+   위의 .term-card:hover 규칙과 명시도가 같으므로 반드시 뒤에 와야 이긴다. */
+@media (hover: none) {
+  .term-card .copy-btn {
+    opacity: 0.55;
+  }
+}
+
+/* === 툴바 Terminal 버튼 배지 === */
+#btn-terminal {
+  position: relative;
+}
+
+.terminal-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--error-text);
+  box-shadow: 0 0 0 1.5px var(--bg-cell);
+  pointer-events: none;
+}
+
+/* === ANSI SGR 렌더 === */
+.ansi-bold { font-weight: 700; }
+.ansi-dim { opacity: 0.65; }
+.ansi-underline { text-decoration: underline; }
+
+.ansi-fg-0 { color: var(--ansi-0); }
+.ansi-fg-1 { color: var(--ansi-1); }
+.ansi-fg-2 { color: var(--ansi-2); }
+.ansi-fg-3 { color: var(--ansi-3); }
+.ansi-fg-4 { color: var(--ansi-4); }
+.ansi-fg-5 { color: var(--ansi-5); }
+.ansi-fg-6 { color: var(--ansi-6); }
+.ansi-fg-7 { color: var(--ansi-7); }
+.ansi-fg-b0 { color: var(--ansi-b0); }
+.ansi-fg-b1 { color: var(--ansi-b1); }
+.ansi-fg-b2 { color: var(--ansi-b2); }
+.ansi-fg-b3 { color: var(--ansi-b3); }
+.ansi-fg-b4 { color: var(--ansi-b4); }
+.ansi-fg-b5 { color: var(--ansi-b5); }
+.ansi-fg-b6 { color: var(--ansi-b6); }
+.ansi-fg-b7 { color: var(--ansi-b7); }
+
+.ansi-bg-0 { background-color: var(--ansi-0); }
+.ansi-bg-1 { background-color: var(--ansi-1); }
+.ansi-bg-2 { background-color: var(--ansi-2); }
+.ansi-bg-3 { background-color: var(--ansi-3); }
+.ansi-bg-4 { background-color: var(--ansi-4); }
+.ansi-bg-5 { background-color: var(--ansi-5); }
+.ansi-bg-6 { background-color: var(--ansi-6); }
+.ansi-bg-7 { background-color: var(--ansi-7); }
+.ansi-bg-b0 { background-color: var(--ansi-b0); }
+.ansi-bg-b1 { background-color: var(--ansi-b1); }
+.ansi-bg-b2 { background-color: var(--ansi-b2); }
+.ansi-bg-b3 { background-color: var(--ansi-b3); }
+.ansi-bg-b4 { background-color: var(--ansi-b4); }
+.ansi-bg-b5 { background-color: var(--ansi-b5); }
+.ansi-bg-b6 { background-color: var(--ansi-b6); }
+.ansi-bg-b7 { background-color: var(--ansi-b7); }
+
+/* 역상(SGR 7): 전경·배경 교환. fg/bg 클래스와 명시도가 같으므로 반드시 뒤에 와야 이긴다. */
+.ansi-reverse { background-color: var(--term-fg); color: var(--term-bg); }
+
+/* === 모바일 ===
+   좁은 화면에서는 기본 높이를 40vh로 낮추고 상한도 함께 낮춘다.
+   (모바일 채팅 패널은 전체 화면 오버레이라 JS가 터미널을 자동으로 접는다.) */
+@media (max-width: 768px) {
+  :root {
+    --terminal-default-height: 40vh;
+  }
+
+  #terminal-panel {
+    max-height: 40vh;
+  }
+
+  .term-cwd {
+    display: none;
+  }
+
+  .term-card-header {
+    padding-left: 60px;
+  }
 }

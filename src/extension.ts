@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { startSession, stopSession, createPoll, endPollCommand, setViewerChatPanel } from './ui/commands';
+import { startSession, stopSession, createPoll, endPollCommand, setViewerChatPanel, registerTerminalCommands } from './ui/commands';
 import { StatusBarManager } from './ui/statusBar';
 import { SessionViewProvider } from './ui/sidebarView';
 import { ViewerChatPanelProvider } from './ui/viewerChatPanel';
@@ -9,6 +9,7 @@ import { Logger } from './utils/logger';
 import { forceStopHttpServer } from './server/httpServer';
 import { forceStopWsServer } from './server/wsServer';
 import { forceStopTunnel } from './ui/commands';
+import { initTerminalShare, onSharingChange } from './terminal/terminalShare';
 
 let statusBarManager: StatusBarManager | undefined;
 let sessionViewProvider: SessionViewProvider | undefined;
@@ -23,6 +24,20 @@ export function activate(context: vscode.ExtensionContext) {
   // StatusBar
   statusBarManager = new StatusBarManager();
   context.subscriptions.push(statusBarManager);
+
+  // 터미널 공유 (VS Code 1.93+ shell integration이 없으면 내부에서 조용히 비활성화된다)
+  context.subscriptions.push(initTerminalShare());
+  registerTerminalCommands(context);
+  // 컨텍스트 키를 활성화 시점에 명시적으로 초기화한다 (우클릭 메뉴 when 절 기준).
+  vscode.commands.executeCommand('setContext', 'codeClassLive.terminalSharing', false);
+  onSharingChange((sharing, terminalName) => {
+    vscode.commands.executeCommand('setContext', 'codeClassLive.terminalSharing', sharing);
+    if (sharing) {
+      statusBarManager?.showTerminalSharing(terminalName);
+    } else {
+      statusBarManager?.hideTerminalSharing();
+    }
+  });
 
   // Sidebar WebviewView
   sessionViewProvider = new SessionViewProvider(context.extensionUri);

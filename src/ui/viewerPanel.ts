@@ -121,6 +121,7 @@ export class ViewerPanel {
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'style.css'));
     const rendererUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'renderer.js'));
     const drawingUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'drawing.js'));
+    const terminalUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'terminal.js'));
     const websocketUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'websocket.js'));
     const viewerUri = webview.asWebviewUri(vscode.Uri.joinPath(viewerBase, 'viewer.js'));
 
@@ -269,12 +270,24 @@ export class ViewerPanel {
     </div>
   </div>
 
+  <!-- 강사 터미널 (하단 접이식 영역) -->
+  <section id="terminal-panel" class="terminal-panel" style="display:none;" aria-label="강사 터미널">
+    <div id="terminal-resize-handle" class="terminal-resize-handle"></div>
+    <div class="terminal-header">
+      <span class="terminal-title" id="terminal-title">Terminal</span>
+      <button id="terminal-close" class="terminal-close-btn" title="Close">&times;</button>
+    </div>
+    <div class="terminal-body" id="terminal-body"></div>
+    <button id="terminal-jump-bottom" class="terminal-jump-btn" style="display:none;">맨 아래로</button>
+  </section>
+
   <!-- 하단 툴바 -->
   <footer id="toolbar" style="display:none;">
     <button id="btn-copy" style="display:none;" title="Copy entire code">Copy</button>
     <button id="btn-files" style="display:none;" title="Toggle file explorer">Explorer</button>
     <button id="btn-poll" class="teacher-only" style="display:none;" title="Create a poll">Poll</button>
     <button id="btn-end-poll" class="teacher-only" style="display:none;" title="End current poll">End Poll</button>
+    <button id="btn-terminal" style="display:none;" title="Toggle shared terminal">Terminal<span id="terminal-badge" class="terminal-badge" style="display:none;"></span></button>
     <button id="btn-chat" title="Toggle chat">Chat</button>
     <button id="btn-download" title="Download file">Download</button>
     <label id="auto-scroll-label">
@@ -284,6 +297,7 @@ export class ViewerPanel {
 
   <script nonce="${nonce}" src="${rendererUri}"></script>
   <script nonce="${nonce}" src="${drawingUri}"></script>
+  <script nonce="${nonce}" src="${terminalUri}"></script>
   <script nonce="${nonce}" src="${websocketUri}"></script>
   <script nonce="${nonce}" src="${viewerUri}"></script>
 </body>

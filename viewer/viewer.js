@@ -88,6 +88,16 @@
   const TREE_MODE_BUFFER = 24; // 스크롤바/보더 여유
   let lastTreeNarrow = null;   // 모드 전환 감지용 (전환 시 드로어 상태 정리)
 
+  // === Terminal share state (강사 터미널 미러링) ===
+  // 강사가 공유를 켜기 전(terminal:state/terminal:full의 sharing:true 수신 전)에는
+  // 하단 툴바의 Terminal 버튼조차 노출하지 않는다. Explorer 버튼(fileTreeReceived)과 같은 방식.
+  let terminalSharing = false;   // 강사가 현재 터미널을 공유 중인가
+  let terminalVisible = false;   // 학생이 패널을 열었는가 (기본 닫힘, localStorage 복원 안 함)
+  let terminalHasNew = false;    // 닫힌 상태에서 새 명령이 도착했는가 (배지)
+  let terminalHeight = 0;        // 패널 높이(px). 높이만 localStorage로 유지한다
+  const TERMINAL_MIN_HEIGHT = 120;
+  const TERMINAL_HEIGHT_KEY = 'jls-terminal-height';
+
   // DOM elements
   const pinScreen = document.getElementById('pin-screen');
   const pinInput = document.getElementById('pin-input');
@@ -144,6 +154,16 @@
   const fileTreeBody = document.getElementById('file-tree-body');
   const fileTreeClose = document.getElementById('file-tree-close');
   const btnFiles = document.getElementById('btn-files');
+
+  // Terminal elements (터미널 공유가 배포되지 않은 호스트에서는 전부 null. 모든 참조에 ?. 사용)
+  const btnTerminal = document.getElementById('btn-terminal');
+  const terminalBadge = document.getElementById('terminal-badge');
+  const terminalPanel = document.getElementById('terminal-panel');
+  const terminalResizeHandle = document.getElementById('terminal-resize-handle');
+  const terminalBody = document.getElementById('terminal-body');
+  const terminalTitle = document.getElementById('terminal-title');
+  const terminalClose = document.getElementById('terminal-close');
+  const terminalJumpBottom = document.getElementById('terminal-jump-bottom');
 
   // 한글 등 IME 조합 중 Enter는 "글자 확정"이지 제출이 아니다. 조합 확정 Enter와 제출 Enter가
   // keydown을 연달아 발생시켜 채팅이 2번 전송되고, 두 번째가 서버 rate limit(500ms)에 걸려
@@ -260,6 +280,9 @@
 
     // Chat resize drag
     initChatResize();
+
+    // Terminal (강사 터미널 공유): 버튼·패널은 sharing:true를 받기 전까지 숨김 상태
+    initTerminal();
 
     // Responsive: handle mobile ↔ desktop transitions (debounced)
     let resizeTimer = null;
@@ -585,12 +608,14 @@
         if (msg.data.mode === 'plaintext') {
           if (documentType === 'plaintext') {
             Renderer.showDocumentCursor(msg.data);
+            nudgeForTerminalInset(); // 하단 터미널이 열려 있으면 커서가 그 뒤로 가려지지 않게 보정
             lastCursorScrollTime = Date.now();
             updateHScrollProxy(); // md rendered→raw 전환 직후 문서 전체 pre가 생기므로 프록시 갱신
           }
         } else {
           if (documentType === 'notebook') {
             Renderer.showTeacherCursor(msg.data);
+            nudgeForTerminalInset(); // 하단 터미널이 열려 있으면 커서가 그 뒤로 가려지지 않게 보정
             lastCursorScrollTime = Date.now();
           }
         }
@@ -606,6 +631,39 @@
 
       case 'session:end':
         handleSessionEnd();
+        break;
+
+      // Terminal events (강사 터미널 미러링)
+      case 'terminal:state':
+        applyTerminalState(msg.data);
+        break;
+
+      case 'terminal:full':
+        applyTerminalState(msg.data);
+        if (msg.data && msg.data.sharing) {
+          window.TerminalView?.applyFull?.(msg.data);
+          // 스냅샷에 이미 명령이 들어 있고 패널이 닫혀 있으면 배지로 알린다
+          if (!terminalVisible && (window.TerminalView?.count?.() || 0) > 0) {
+            terminalHasNew = true;
+            updateTerminalBadge();
+          }
+        }
+        break;
+
+      case 'terminal:start':
+        window.TerminalView?.onStart?.(msg.data);
+        if (!terminalVisible) {
+          terminalHasNew = true;
+          updateTerminalBadge();
+        }
+        break;
+
+      case 'terminal:data':
+        window.TerminalView?.onData?.(msg.data);
+        break;
+
+      case 'terminal:end':
+        window.TerminalView?.onEnd?.(msg.data);
         break;
 
       // Chat events
@@ -884,6 +942,7 @@
     toolbar.style.display = 'none';
     connectionStatus.style.display = 'none';
     toggleChat(false);
+    resetTerminalUI(); // 터미널 패널·버튼·배지 정리 및 카드 폐기
     chatMessages.innerHTML = '';
     if (pollBanner) pollBanner.style.display = 'none';
     currentPollId = null;
@@ -1201,6 +1260,12 @@
         if (appLayout) appLayout.classList.remove('chat-open');
         if (chatResizeHandle) chatResizeHandle.classList.remove('visible');
       }
+    }
+
+    // 모바일에서는 채팅과 터미널이 모두 fixed 오버레이라 동시에 뜨면 본문이 남지 않는다.
+    // 채팅을 열면 터미널을 접는다(반대 방향은 toggleTerminal이 담당).
+    if (chatVisible && isMobile && terminalVisible) {
+      toggleTerminal(false);
     }
 
     if (chatVisible) {
@@ -1603,6 +1668,196 @@
     });
   }
 
+  // === Terminal (강사 터미널 미러링) ===
+
+  // 배포 상태에 따라 터미널 DOM이 아예 없을 수 있다. 모든 함수는 요소가 없어도 조용히 지나간다.
+  function initTerminal() {
+    if (!terminalPanel) return;
+
+    // 높이만 복원한다. 열림 상태는 복원하지 않는다(버튼을 눌러야 보인다).
+    let saved = 0;
+    try { saved = parseInt(localStorage.getItem(TERMINAL_HEIGHT_KEY), 10) || 0; } catch (e) { /* 무시 */ }
+    terminalHeight = clampTerminalHeight(saved || Math.round(window.innerHeight * 0.3));
+
+    window.TerminalView?.mount?.({ bodyEl: terminalBody, jumpBtnEl: terminalJumpBottom });
+
+    btnTerminal?.addEventListener('click', () => toggleTerminal(!terminalVisible));
+    terminalClose?.addEventListener('click', () => toggleTerminal(false));
+
+    initTerminalResize();
+
+    // 초기 상태: 닫힘 + 버튼 숨김 (sharing:true를 받기 전까지)
+    applyTerminalVisibility();
+    updateTerminalButton();
+  }
+
+  function clampTerminalHeight(h) {
+    const max = Math.max(TERMINAL_MIN_HEIGHT, Math.round(window.innerHeight * 0.6));
+    return Math.min(max, Math.max(TERMINAL_MIN_HEIGHT, Math.round(h || 0)));
+  }
+
+  // --terminal-height는 --bottom-inset을 통해 하단에 앵커된 요소 전체에 영향을 준다.
+  // 닫혀 있으면 0px이라 기존 레이아웃과 완전히 동일해진다.
+  function applyTerminalHeight() {
+    const px = terminalVisible ? clampTerminalHeight(terminalHeight) : 0;
+    document.documentElement.style.setProperty('--terminal-height', px + 'px');
+  }
+
+  function applyTerminalVisibility() {
+    if (terminalPanel) terminalPanel.style.display = terminalVisible ? '' : 'none';
+    if (btnTerminal) btnTerminal.classList.toggle('active', terminalVisible);
+    applyTerminalHeight();
+  }
+
+  function updateTerminalButton() {
+    if (btnTerminal) btnTerminal.style.display = terminalSharing ? '' : 'none';
+    updateTerminalBadge();
+  }
+
+  // 배지 span은 HTML에 이미 있다(채팅처럼 매번 생성하지 않는다). 표시 여부만 바꾼다.
+  function updateTerminalBadge() {
+    if (!terminalBadge) return;
+    terminalBadge.style.display = (terminalSharing && terminalHasNew && !terminalVisible) ? '' : 'none';
+  }
+
+  function toggleTerminal(show) {
+    const next = typeof show === 'boolean' ? show : !terminalVisible;
+    if (next && !terminalSharing) return; // 공유 중이 아니면 열지 않는다
+    if (next === terminalVisible) {
+      applyTerminalVisibility();
+      return;
+    }
+    terminalVisible = next;
+
+    // 모바일: 채팅과 동시에 뜨면 본문이 남지 않으므로 채팅을 접는다
+    if (terminalVisible && window.innerWidth <= 768 && chatVisible) {
+      toggleChat(false);
+    }
+
+    applyTerminalVisibility();
+
+    if (terminalVisible) {
+      terminalHasNew = false;
+    }
+    updateTerminalBadge();
+
+    // 하단 영역 높이가 바뀌면 셀의 화면 좌표도 바뀐다 → 판서 캐시 무효화
+    if (window.Drawing) Drawing.invalidateCellCache?.();
+    updateHScrollProxy();
+    nudgeForTerminalInset();
+  }
+
+  function applyTerminalState(data) {
+    const sharing = !!(data && data.sharing);
+    if (!sharing) {
+      resetTerminalUI();
+      return;
+    }
+    terminalSharing = true;
+    if (terminalTitle) terminalTitle.textContent = (data && data.terminalName) || 'Terminal';
+    updateTerminalButton();
+  }
+
+  // 공유 중지·세션 종료 공통 정리: 두 경로가 어긋나지 않도록 한 곳에 모은다
+  function resetTerminalUI() {
+    terminalSharing = false;
+    terminalHasNew = false;
+    if (terminalVisible) {
+      terminalVisible = false;
+      if (window.Drawing) Drawing.invalidateCellCache?.();
+    }
+    applyTerminalVisibility();
+    updateTerminalButton();
+    window.TerminalView?.clear?.();
+  }
+
+  // 세로 리사이즈 (initChatResize는 clientX 기반 가로 전용이라 재사용 불가. 같은 구조를 세로로)
+  function initTerminalResize() {
+    if (!terminalResizeHandle || !terminalPanel) return;
+
+    let isResizing = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    function begin(clientY) {
+      isResizing = true;
+      startY = clientY;
+      startHeight = clampTerminalHeight(terminalHeight);
+      terminalResizeHandle.classList.add('active');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    function move(clientY) {
+      if (!isResizing) return;
+      // 위로 드래그하면 터미널이 커진다(핸들이 패널 위쪽 경계)
+      const delta = startY - clientY;
+      terminalHeight = clampTerminalHeight(startHeight + delta);
+      applyTerminalHeight();
+    }
+
+    function end() {
+      if (!isResizing) return;
+      isResizing = false;
+      terminalResizeHandle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(clampTerminalHeight(terminalHeight))); } catch (e) { /* 무시 */ }
+      if (window.Drawing) Drawing.invalidateCellCache?.();
+      updateHScrollProxy();
+      nudgeForTerminalInset();
+    }
+
+    terminalResizeHandle.addEventListener('mousedown', (e) => {
+      begin(e.clientY);
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => move(e.clientY));
+    document.addEventListener('mouseup', end);
+
+    // 터치(모바일): preventDefault를 쓰므로 passive:false
+    terminalResizeHandle.addEventListener('touchstart', (e) => {
+      if (!e.touches || !e.touches[0]) return;
+      begin(e.touches[0].clientY);
+      e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('touchmove', (e) => {
+      if (!isResizing || !e.touches || !e.touches[0]) return;
+      move(e.touches[0].clientY);
+      e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('touchend', end);
+    document.addEventListener('touchcancel', end);
+  }
+
+  // 하단 터미널이 가리는 만큼의 inset 보정.
+  // 상단 앵커(setActiveCell, scrollToNotebookAnchor 등)는 헤더 기준이라 하단 높이의 영향을 받지
+  // 않는다. 실제 문제는 renderer.js의 '이미 보이는가' 판정(scrollToCursorElement)이
+  // window.innerHeight만 보고 터미널 뒤에 가려진 커서를 '보인다'고 판단해 스크롤을 생략하는 것이다.
+  // 그 판정 뒤에 한 번 더 밀어 준다. #auto-scroll이 꺼져 있으면 Renderer와 동일하게 아무것도 안 한다.
+  function nudgeForTerminalInset() {
+    if (!terminalVisible) return;
+    const autoScroll = document.getElementById('auto-scroll');
+    if (!autoScroll || !autoScroll.checked) return;
+
+    const target = document.querySelector('.teacher-line-highlight')
+      || document.querySelector('.teacher-cursor')
+      || document.querySelector('#notebook-cells .cell.active');
+    if (!target) return;
+
+    const inset = clampTerminalHeight(terminalHeight);
+    const headerH = document.getElementById('header')?.offsetHeight || 48;
+    const band = window.innerHeight - headerH - inset - 16;
+    const rect = target.getBoundingClientRect();
+    if (band <= 0 || rect.height > band) return; // 어차피 다 안 들어오는 대상은 건드리지 않는다
+
+    const limit = window.innerHeight - inset - 8;
+    if (rect.bottom <= limit) return;
+    const room = Math.max(0, rect.top - headerH - 8);
+    const delta = Math.min(rect.bottom - limit, room);
+    if (delta > 1) window.scrollBy({ top: delta, behavior: 'auto' });
+  }
+
   // === Draw Tools Position ===
 
   function updateDrawToolsPosition() {
@@ -1653,6 +1908,13 @@
           if (appLayout) appLayout.classList.remove('chat-open');
         }
       }
+    }
+    // 창이 작아지면 터미널 최대 높이(60vh)도 줄어든다 → 다시 클램프해 반영
+    if (terminalPanel) {
+      const clamped = clampTerminalHeight(terminalHeight);
+      if (clamped !== terminalHeight) terminalHeight = clamped;
+      applyTerminalHeight();
+      nudgeForTerminalInset();
     }
     updateDrawToolsPosition();
   }
