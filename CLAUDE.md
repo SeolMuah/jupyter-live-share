@@ -234,3 +234,6 @@ curl -s -X PATCH \
 - Cloudflare Quick Tunnel URL은 매 세션마다 변경됨 (정상 동작)
 - 브라우저 뷰어에서 HTML 출력 렌더링 시 반드시 DOMPurify로 새니타이징
 - Windows에서 cloudflared 프로세스 종료 시 `process.kill()` 대신 `taskkill` 사용 필요할 수 있음
+- **뷰어 HTML은 3벌로 중복되어 있다**: `viewer/index.html`(학생 브라우저 = 터널 링크), `src/ui/viewerPanel.ts`, `src/ui/teacherPreviewPanel.ts`(VS Code 웹뷰 2종). JS/CSS는 `viewer/`를 공유하지만 CDN 스크립트·CSP·DOM 요소는 각자 적어둔다. 한쪽만 고치면 **브라우저에서만 깨지는 버그**가 난다(v2.2.11~2.4.5 브라우저 빈 화면 사고의 원인)
+- **CDN 스크립트의 SRI 해시는 반드시 실측 후 적어라**(기억·추측 금지). 검증: `curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`. 해시가 틀리면 브라우저가 스크립트를 차단하는데, 웹뷰는 다른 버전을 쓰고 있으면 멀쩡해 보여 발견이 늦어진다
+- 브라우저 뷰어를 VS Code 없이 검증하려면 `dist/viewer`를 정적 서빙하고 WS로 `join:result` → `notebook:full`을 흉내내는 목 서버를 띄운다. 이때 **`127.0.0.1`/`localhost`로 접속하면 뷰어가 자기를 교사로 판정**하므로(`viewer.js`의 isTeacher), 학생 경로를 재현하려면 `http://[::1]:포트` 등 다른 호스트명으로 접속해야 한다
