@@ -381,6 +381,7 @@ const TerminalView = (() => {
     const copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
     copyBtn.textContent = 'Copy';
+    copyBtn.title = '명령어 복사';
     root.appendChild(copyBtn);
 
     const header = document.createElement('div');
@@ -436,9 +437,10 @@ const TerminalView = (() => {
       finished: false,
     };
 
+    // 학생은 명령을 그대로 붙여넣어 실행한다. 프롬프트 기호와 실행 결과가 함께 복사되면
+    // 터미널에 붙여넣는 순간 깨지므로, 명령어 한 줄만 복사한다.
     copyBtn.addEventListener('click', () => {
-      const cmdLine = card.commandLine ? '$ ' + card.commandLine + '\n' : '';
-      copyText(cmdLine + (card.outputEl ? card.outputEl.textContent : ''), copyBtn);
+      copyText(card.commandLine || '', copyBtn);
     });
 
     moreBtn.addEventListener('click', () => {
